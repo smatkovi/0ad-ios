@@ -103,8 +103,16 @@ set +x
 
 # What came out, and for which platform. A wrong platform links fine and only
 # shows up when the simulator refuses the app.
-LIB="build-release/js/src/build/libjs_static.a"
-RUST_LIB="build-release/$(grep jsrust build-release/js/src/build/backend.mk | cut -d / -f 2-)"
+# 0 A.D.'s own build.sh greps the jsrust path out of backend.mk, which came
+# out empty here; searching for the file is shorter and does not depend on how
+# the generated makefile is worded.
+LIB=$(find build-release -name libjs_static.a | head -1)
+RUST_LIB=$(find build-release -name libjsrust.a | head -1)
+[ -n "$LIB" ] && [ -n "$RUST_LIB" ] || {
+    echo "Bibliotheken nicht gefunden:"
+    find build-release -name "*.a" | head -20
+    exit 1
+}
 mkdir -p "$PREFIX/lib" "$PREFIX/include"
 cp -L "$LIB" "$PREFIX/lib/libmozjs128-release.a"
 cp -L "$RUST_LIB" "$PREFIX/lib/libmozjs128-rust.a"

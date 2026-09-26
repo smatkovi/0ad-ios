@@ -22,7 +22,7 @@ jobs:
   gles:
     name: OpenGL ES in the simulator
     runs-on: macos-14
-    timeout-minutes: 60
+    timeout-minutes: 45
     env:
       BUNDLE_ID: org.smatkovi.zeroad.probe
     steps:
@@ -65,13 +65,18 @@ jobs:
           xcrun simctl boot "$DEV"
           xcrun simctl bootstatus "$DEV" -b
           xcrun simctl install "$DEV" "$PWD/build/triangle.app"
-          xcrun simctl launch --console-pty "$DEV" "$BUNDLE_ID" > launch.log 2>&1 &
-          LAUNCH=$!
-          sleep 15
+          # Not --console-pty: attached to a pipe instead of a terminal it does
+          # not come back, and the step sat there for half an hour. Plain launch
+          # returns as soon as the app is up; what the probe found is in its
+          # report file anyway, and the system log has the stdout.
+          xcrun simctl launch "$DEV" "$BUNDLE_ID"
+          sleep 20
           xcrun simctl io "$DEV" screenshot simulator.png || true
-          wait $LAUNCH || true
           DATA=$(xcrun simctl get_app_container "$DEV" "$BUNDLE_ID" data)
           cp "$DATA/Documents/probe.txt" . || true
+          xcrun simctl spawn "$DEV" log show --last 3m --style compact \
+              --predicate 'process == "triangle"' > launch.log 2>&1 || true
+          xcrun simctl shutdown "$DEV" || true
 
       - name: What the probe saw
         run: |

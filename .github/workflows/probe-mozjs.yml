@@ -37,6 +37,7 @@ jobs:
             ext/spidermonkey-0.28.0
             ext/prefix-sim-js
           key: mozjs-128.13.0-iphonesimulator-v1
+          restore-keys: mozjs-128.13.0-iphonesimulator-v1-
 
       - name: Build SpiderMonkey
         id: build
