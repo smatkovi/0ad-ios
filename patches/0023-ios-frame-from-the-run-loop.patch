@@ -52,7 +52,7 @@ loop to nest in.
 
 --- source/main.cpp
 +++ source/main.cpp
-@@ -555,6 +555,143 @@
+@@ -555,6 +555,160 @@
  
  // moved into a helper function to ensure args is destroyed before
  // exit(), which may result in a memory leak.
@@ -178,6 +178,23 @@ loop to nest in.
 +	}
 +	++frames;
 +
++	// One question, split in half: paint the default framebuffer a colour the
++	// engine never uses and present it. If the screen turns blue, then
++	// presenting works and what the engine draws is not reaching the default
++	// framebuffer -- the renderer's own path. If it stays the simulator's
++	// placeholder, then the window and context themselves never present,
++	// although the GLES probe in this repository does exactly that and shows
++	// its triangle.
++	if (getenv("PYROGENESIS_IOS_PAINT_TEST"))
++	{
++		glBindFramebuffer(GL_FRAMEBUFFER, 0);
++		glViewport(0, 0, 2556, 1179);
++		glClearColor(0.0f, 0.45f, 0.9f, 1.0f);
++		glClear(GL_COLOR_BUFFER_BIT);
++		SDL_GL_SwapWindow(g_VideoMode.GetWindow());
++		return;
++	}
++
 +	if (g_Shutdown != ShutdownType::None)
 +	{
 +		// The desktop would unwind here and possibly restart. On iOS the system
@@ -196,7 +213,7 @@ loop to nest in.
  static void RunGameOrAtlas(const std::span<const char* const> argv)
  {
  	const CmdLineArgs args(argv);
-@@ -627,11 +764,22 @@
+@@ -627,11 +781,22 @@
  
  	// We need to initialize SpiderMonkey and libxml2 in the main thread before
  	// any thread uses them. So initialize them here before we might run Atlas.
@@ -220,7 +237,7 @@ loop to nest in.
  
  	if (ATLAS_RunIfOnCmdLine(args, false))
  		return;
-@@ -698,7 +846,13 @@
+@@ -698,7 +863,13 @@
  
  		// This must come after VFS init, which sets the current directory (required for finding our
  		// output log files).
@@ -234,7 +251,7 @@ loop to nest in.
  
  		if (!Init(args, std::exchange(firstIteration, false) ? INIT_MODS : 0))
  		{
-@@ -731,7 +885,12 @@
+@@ -731,7 +902,12 @@
  		std::optional<DAP::Interface> dapInterface{CreateDAPInterface(args)};
  #endif // CONFIG2_DAP_INTERFACE
  
@@ -247,7 +264,7 @@ loop to nest in.
  
  		if (isVisual)
  		{
-@@ -744,6 +903,27 @@
+@@ -744,6 +920,27 @@
  
  		try
  		{
@@ -275,7 +292,7 @@ loop to nest in.
  			// MSVC doesn't support copy elision in ternary expressions. So we use a lambda instead.
  			std::optional<RL::Interface> rlInterface{[&]() -> std::optional<RL::Interface>
  				{
-@@ -837,6 +1017,15 @@
+@@ -837,6 +1034,15 @@
  	{
  		g_ExitStatus = EXIT_FAILURE;
  	}
