@@ -39,6 +39,16 @@ case "$SDK" in
     *) echo "unknown SDK: $SDK"; exit 1 ;;
 esac
 
+# Built before, and cached? 0 A.D.'s own build.sh keeps the same kind of stamp
+# for the same reason: this is four to five minutes of every CI run, and the
+# dependency cache restores lib/ and include-release/ but not the source tree,
+# so without the stamp it is rebuilt from scratch every single time.
+if [ "$(cat "$PREFIX/.already-built" 2>/dev/null)" = "$PV+ios-$SDK" ] \
+   && [ -e "$PREFIX/lib/libmozjs128-release.a" ]; then
+    echo "SpiderMonkey $PV ($SDK): schon gebaut"
+    exit 0
+fi
+
 mkdir -p "$W"
 cd "$W"
 
@@ -147,7 +157,9 @@ rm -f "$PREFIX/include-release/mozzconf.h" \
       "$PREFIX/include-release/zconf.h" \
       "$PREFIX/include-release/zlib.h"
 
-echo "$PV+ios" > "$PREFIX/.already-built"
+# The SDK belongs in the stamp: a device build and a simulator build are not
+# interchangeable, and they land in the same place.
+echo "$PV+ios-$SDK" > "$PREFIX/.already-built"
 
 echo "--- Ergebnis:"
 ls -la "$PREFIX/lib"
