@@ -58,6 +58,14 @@ ICU_CROSS_BUILD, LIBSODIUM_SKIP_TESTS, CMAKE_FLAGS. What had to be added:
   generated link line carries no -lboost_* - so cross-building filesystem and
   system with b2 would be a long build for nothing.
 
+* **The source libraries at the end of the script.** FCollada is only needed for
+  the Collada module, which an iOS build does not ship - and it uses Carbon's
+  MPCriticalRegionID, which does not exist there. NVTT is off anyway. And
+  SpiderMonkey is built by tools/build-mozjs-ios.sh, which knows the iOS target;
+  0 A.D.'s own build.sh only knows Darwin as macOS. premake stays, but with the
+  iOS flags stripped: it is a host tool, and the ARCHLESS_* variables still carry
+  -isysroot and -target.
+
 * **Ten libraries are skipped**, and not because they fail: each is switched off
   in the engine anyway. wxWidgets is Atlas, gmp/nettle/gnutls/gloox are the
   multiplayer lobby, ogg/vorbis/openal are the sound, MoltenVK would be a
@@ -378,3 +386,45 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  	LIB_DIRECTORY="MoltenVK-$MOLTENVK_VERSION"
  	LIB_ARCHIVE="v$MOLTENVK_VERSION.tar.gz"
  	LIB_URL="https://github.com/KhronosGroup/MoltenVK/archive/refs/tags/"
+@@ -1241,6 +1364,14 @@
+ ./../source/cxxtest-4.4/build.sh $build_sh_options || die "cxxtest build failed"
+ 
+ # --------------------------------------------------------------
++if [ "$IOS" = "true" ]; then
++	# FCollada is only needed for the Collada module, which an iOS build does not
++	# ship -- and it uses Carbon's MPCriticalRegionID, which does not exist
++	# there. NVTT is switched off anyway (--without-nvtt). And SpiderMonkey is
++	# built by tools/build-mozjs-ios.sh, which knows --target=aarch64-apple-ios;
++	# 0 A.D.'s own build.sh only knows Darwin as macOS.
++	echo "Skipping FCollada, NVTT and SpiderMonkey - not part of an iOS build"
++else
+ # shellcheck disable=SC2086
+ ./../source/fcollada/build.sh $build_sh_options || die "FCollada build failed"
+ 
+@@ -1251,6 +1382,7 @@
+ # --------------------------------------------------------------
+ # shellcheck disable=SC2086
+ ./../source/spidermonkey/build.sh $build_sh_options || die "SpiderMonkey build failed"
++fi
+ 
+ # --------------------------------------------------------------------
+ # Build tools must be compiled for the build arch, not the target arch.
+@@ -1259,8 +1391,18 @@
+ 
+ # --------------------------------------------------------------
+ # shellcheck disable=SC2086
++if [ "$IOS" = "true" ]; then
++	# premake has to run on this machine, so it gets none of the iOS flags --
++	# the ARCHLESS_* ones still carry -isysroot and -target.
++	ARCH="$(uname -m)" CC=clang CXX=clang++ CPPFLAGS= \
++	CFLAGS="-arch $(uname -m)" \
++	CXXFLAGS="-arch $(uname -m) -stdlib=libc++" \
++	LDFLAGS="-arch $(uname -m) -stdlib=libc++" \
++		./../source/premake-core/build.sh $build_sh_options || die "Premake build failed"
++else
+ ARCH="$(uname -m)" \
+ CFLAGS="${ARCHLESS_CFLAGS} -arch $(uname -m)" \
+ CXXFLAGS="${ARCHLESS_CXXFLAGS} -arch $(uname -m)" \
+ LDFLAGS="${ARCHLESS_LDFLAGS} -arch $(uname -m)" \
+ 	./../source/premake-core/build.sh $build_sh_options || die "Premake build failed"
++fi
