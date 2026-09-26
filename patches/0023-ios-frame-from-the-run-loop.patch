@@ -119,14 +119,17 @@ loop to nest in.
  
  		if (isVisual)
  		{
-@@ -753,6 +812,22 @@
+@@ -753,6 +812,25 @@
  						return std::nullopt;
  				}()};
  
 +#if OS_IOS
 +			if (isVisual)
 +			{
-+				g_IosSession->rlInterface = std::move(rlInterface);
++				// emplace, not assignment: RL::Interface can be moved into
++				// place but has no move assignment.
++				if (rlInterface)
++					g_IosSession->rlInterface.emplace(std::move(*rlInterface));
 +				g_IosSession->fixedFrameFrequency = fixedFrameFrequency;
 +				if (SDL_iPhoneSetAnimationCallback(g_VideoMode.GetWindow(), 1,
 +						&IosFrameCallback, nullptr) != 0)
@@ -142,7 +145,7 @@ loop to nest in.
  			while (g_Shutdown == ShutdownType::None)
  			{
  				if (isVisual)
-@@ -837,6 +912,15 @@
+@@ -837,6 +915,15 @@
  	{
  		g_ExitStatus = EXIT_FAILURE;
  	}
