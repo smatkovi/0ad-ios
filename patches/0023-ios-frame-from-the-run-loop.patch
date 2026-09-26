@@ -52,7 +52,7 @@ loop to nest in.
 
 --- source/main.cpp
 +++ source/main.cpp
-@@ -555,6 +555,81 @@
+@@ -555,6 +555,92 @@
  
  // moved into a helper function to ensure args is destroyed before
  // exit(), which may result in a memory leak.
@@ -109,13 +109,24 @@ loop to nest in.
 + */
 +void IosStartFrames(void*)
 +{
-+	if (SDL_iPhoneSetAnimationCallback(g_VideoMode.GetWindow(), 1,
-+			&IosFrameCallback, nullptr) != 0)
++	SDL_Window* const window{g_VideoMode.GetWindow()};
++	const int result{SDL_iPhoneSetAnimationCallback(window, 1, &IosFrameCallback, nullptr)};
++	// Both go to stdout, which the simulator's system log keeps: the question
++	// "is the frame being called at all" is otherwise indistinguishable from
++	// "the frame is being called and does nothing".
++	debug_printf("iOS: window %p, animation callback %s\n",
++		static_cast<void*>(window), result == 0 ? "registered" : SDL_GetError());
++	if (result != 0)
 +		LOGERROR("Cannot hand the frame to UIKit: %s", SDL_GetError());
 +}
 +
 +void IosFrameCallback(void*)
 +{
++	static int frames{0};
++	if (frames < 3 || frames % 300 == 0)
++		debug_printf("iOS: frame %d\n", frames);
++	++frames;
++
 +	if (g_Shutdown != ShutdownType::None)
 +	{
 +		// The desktop would unwind here and possibly restart. On iOS the system
@@ -134,7 +145,7 @@ loop to nest in.
  static void RunGameOrAtlas(const std::span<const char* const> argv)
  {
  	const CmdLineArgs args(argv);
-@@ -627,11 +702,22 @@
+@@ -627,11 +713,22 @@
  
  	// We need to initialize SpiderMonkey and libxml2 in the main thread before
  	// any thread uses them. So initialize them here before we might run Atlas.
@@ -158,7 +169,7 @@ loop to nest in.
  
  	if (ATLAS_RunIfOnCmdLine(args, false))
  		return;
-@@ -698,7 +784,13 @@
+@@ -698,7 +795,13 @@
  
  		// This must come after VFS init, which sets the current directory (required for finding our
  		// output log files).
@@ -172,7 +183,7 @@ loop to nest in.
  
  		if (!Init(args, std::exchange(firstIteration, false) ? INIT_MODS : 0))
  		{
-@@ -731,7 +823,12 @@
+@@ -731,7 +834,12 @@
  		std::optional<DAP::Interface> dapInterface{CreateDAPInterface(args)};
  #endif // CONFIG2_DAP_INTERFACE
  
@@ -185,7 +196,7 @@ loop to nest in.
  
  		if (isVisual)
  		{
-@@ -744,6 +841,27 @@
+@@ -744,6 +852,27 @@
  
  		try
  		{
@@ -213,7 +224,7 @@ loop to nest in.
  			// MSVC doesn't support copy elision in ternary expressions. So we use a lambda instead.
  			std::optional<RL::Interface> rlInterface{[&]() -> std::optional<RL::Interface>
  				{
-@@ -837,6 +955,15 @@
+@@ -837,6 +966,15 @@
  	{
  		g_ExitStatus = EXIT_FAILURE;
  	}
