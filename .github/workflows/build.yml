@@ -16,7 +16,9 @@ on:
       - 'patches/**'
       - 'tools/get-source.sh'
       - 'tools/build-deps-ios.sh'
+      - 'tools/build-mozjs-ios.sh'
       - 'tools/ios-build.sh'
+      - 'tools/show-platform.sh'
       - '.github/workflows/build.yml'
 
 jobs:
