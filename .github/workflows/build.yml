@@ -162,6 +162,7 @@ jobs:
           cp "simulator-240s.png" simulator.png || true
           mkdir -p out
           cp -R "$CONTAINER/Library/Application Support/0ad/logs" out/logs || true
+          cp "$CONTAINER/Documents/ios-frames.txt" out/ 2>/dev/null || true
           # interestinglog.html holds the warnings and errors on their own.
           ls -la out/logs || true
           xcrun simctl spawn "$DEV" log show --last 5m --style compact \
@@ -186,6 +187,8 @@ jobs:
           else
               echo "(keiner)"
           fi
+          echo "--- wurde ein Rahmen gezeichnet?"
+          cat out/ios-frames.txt 2>/dev/null || echo "(die Datei gibt es nicht -- der Rueckruf lief nie)"
           echo "--- Systemprotokoll"
           tail -40 out/system-log.txt 2>/dev/null || true
           # system_info.txt is written once the window and the GL context stand,
