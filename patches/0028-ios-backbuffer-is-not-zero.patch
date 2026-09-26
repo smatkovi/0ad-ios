@@ -18,6 +18,10 @@ triangle all along.
 So the device remembers what is bound right after the context is created, and
 the backbuffer uses that instead of zero.
 
+The query has to come after ogl_Init: glGetIntegerv is a glad function pointer
+and is null before that, so asking earlier took the engine down before the
+renderer had even started.
+
 --- source/renderer/backend/gl/Device.h
 +++ source/renderer/backend/gl/Device.h
 @@ -137,11 +137,27 @@
@@ -50,26 +54,29 @@ the backbuffer uses that instead of zero.
  	bool m_ARB = false;
 --- source/renderer/backend/gl/Device.cpp
 +++ source/renderer/backend/gl/Device.cpp
-@@ -243,6 +243,19 @@
- 		}
- 		SDL_GL_GetDrawableSize(window, &device->m_SurfaceDrawableWidth, &device->m_SurfaceDrawableHeight);
- 
+@@ -280,6 +280,22 @@
+ #else
+ 		ogl_Init(SDL_GL_GetProcAddress);
+ #endif
++
 +#if OS_IOS
-+		// Whatever is bound now is the window's framebuffer: SDL has just made
-+		// the context, and on iOS that means a framebuffer object with a
-+		// renderbuffer feeding the CAEAGLLayer. It is never zero, and binding
-+		// zero draws nowhere -- see CFramebuffer::CreateBackbuffer, where the
-+		// backbuffer is a zero framebuffer on every other platform.
++		// Whatever is bound now is the window's framebuffer: on iOS a CAEAGLLayer
++		// is fed by a renderbuffer attached to a framebuffer object, and SDL makes
++		// that object with the context. It is never zero, and binding zero draws
++		// nowhere -- see CFramebuffer::CreateBackbuffer, where the backbuffer is a
++		// zero framebuffer on every other platform.
++		//
++		// After ogl_Init, not before: glGetIntegerv is a glad function pointer and
++		// is null until then.
 +		{
 +			GLint binding{0};
 +			glGetIntegerv(GL_FRAMEBUFFER_BINDING, &binding);
 +			device->m_DefaultFramebuffer = static_cast<GLuint>(binding);
 +		}
 +#endif
-+
- #if OS_WIN
- 		ogl_Init(SDL_GL_GetProcAddress, wutil_GetAppHDC());
- #elif (defined(SDL_VIDEO_DRIVER_X11) || defined(SDL_VIDEO_DRIVER_WAYLAND)) && !CONFIG2_GLES
+ 	}
+ 	else
+ 	{
 --- source/renderer/backend/gl/Framebuffer.cpp
 +++ source/renderer/backend/gl/Framebuffer.cpp
 @@ -172,6 +172,13 @@
