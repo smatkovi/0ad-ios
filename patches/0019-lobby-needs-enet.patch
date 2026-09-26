@@ -1,0 +1,27 @@
+The lobby stub needs enet's include path.
+
+With --without-lobby the lobby project still compiles lobby/scripting, and that
+reaches enet.h through the network headers - but its extern_libs list names only
+spidermonkey, boost, libsodium and fmt. Nobody notices on the other platforms,
+because there enet's headers sit in a default include path: a distribution puts
+them in /usr/include, and the Android port's compiler wrapper adds -isystem over
+the whole Termux prefix. Here they are in libraries/macos/enet/include and
+nowhere else, so the list has to say so.
+
+    source/lib/external_libraries/enet.h:48:10: fatal error: 'enet/enet.h' file not found
+
+--- build/premake/premake5.lua
++++ build/premake/premake5.lua
+@@ -804,6 +804,12 @@
+ 		extern_libs = {
+ 			"spidermonkey",
+ 			"boost",
++			-- lobby/scripting reaches enet.h through the network headers even
++			-- with the lobby switched off. Every other platform gets away
++			-- without this because enet's headers sit in a default include
++			-- path; here they are in libraries/macos/enet, so the list has to
++			-- say so.
++			"enet",
+ 			"libsodium",
+ 			"fmt",
+ 		}

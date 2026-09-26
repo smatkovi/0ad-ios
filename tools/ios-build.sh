@@ -108,10 +108,22 @@ rm -rf ../workspaces/ios
 
 echo "### make"
 cd ../workspaces/ios
-make -j"$JOBS" config=release pyrogenesis 2>&1 | tee "$W/build.log" | \
-    grep -E "^(==== |.*(error|Error):)" || true
+# Not `make | tee | grep || true`: /bin/sh has no pipefail, so a failing make
+# disappears behind the grep's exit status and the job reports success with no
+# binary. That happened once -- hence the log and the explicit check.
+if ! make -j"$JOBS" config=release pyrogenesis > "$W/build.log" 2>&1; then
+    grep -E "(error|Error):|fatal error|Error [0-9]" "$W/build.log" | head -30
+    echo "--- die letzten 30 Zeilen"
+    tail -30 "$W/build.log"
+    exit 1
+fi
+grep -E "^==== " "$W/build.log" || true
 
 echo "### Ergebnis"
 ls -la "$SRC/binaries/system/" || true
+test -x "$SRC/binaries/system/pyrogenesis" || {
+    echo "FEHLER: kein pyrogenesis, obwohl make zufrieden war"
+    exit 1
+}
 sh "$(cd "$(dirname "$0")" && pwd)/show-platform.sh" \
-    "$SRC/binaries/system/pyrogenesis" 2>/dev/null || true
+    "$SRC/binaries/system/pyrogenesis"
