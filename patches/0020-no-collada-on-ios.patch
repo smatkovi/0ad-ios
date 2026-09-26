@@ -1,0 +1,56 @@
+No Collada module on iOS, for now.
+
+The Collada module is a shared library that DllLoader opens with dlopen at
+runtime to convert raw .dae art into the engine's own formats. It is not linked
+into pyrogenesis - but the main project carries `dependson { "Collada" }`, so
+`make pyrogenesis` builds it anyway, and it needs FCollada, which wants Carbon's
+MPCriticalRegionID. That does not exist on iOS.
+
+Leaving it out costs nothing for playing: the shipped game data is already
+converted, and the engine only complains about a missing module when a mod
+ships .dae files. Getting it back means patching FCollada's critical section to
+use pthreads and putting the .dylib where dlopen finds it - inside the bundle in
+the simulator, and under Frameworks/ on a device. Worth doing later, not needed
+to find out whether the game runs.
+
+    source/collada/precompiled.h:36:10: fatal error: 'FCollada.h' file not found
+
+--- build/premake/premake5.lua
++++ build/premake/premake5.lua
+@@ -1177,7 +1177,9 @@
+ 	project_add_contents(source_root, {}, {}, extra_params)
+ 	project_add_extern_libs(used_extern_libs, target_type)
+ 
+-	dependson { "Collada" }
++	if not _OPTIONS["ios"] then
++		dependson { "Collada" }
++	end
+ 
+ 	rtti "off"
+ 
+@@ -1605,7 +1607,9 @@
+ 	project_add_contents(source_root, {}, {}, extra_params)
+ 	project_add_extern_libs(used_extern_libs, target_type)
+ 
+-	dependson { "Collada" }
++	if not _OPTIONS["ios"] then
++		dependson { "Collada" }
++	end
+ 
+ 	rtti "off"
+ 
+@@ -1697,7 +1701,13 @@
+ 	setup_atlas_frontends()
+ end
+ 
+-setup_collada_projects()
++-- The Collada module converts raw .dae art at load time and is loaded with
++-- dlopen, not linked. The shipped game data is already converted, so the engine
++-- runs without it and only complains when a mod ships .dae - and FCollada wants
++-- Carbon's MPCriticalRegionID, which iOS does not have. So: not on iOS, for now.
++if not _OPTIONS["ios"] then
++	setup_collada_projects()
++end
+ 
+ if not _OPTIONS["without-tests"] then
+ 	setup_tests()
