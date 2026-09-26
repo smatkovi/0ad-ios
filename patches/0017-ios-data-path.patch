@@ -1,0 +1,68 @@
+Find the game data on iOS when it was downloaded.
+
+The macOS path handling already does the right thing on iOS and needs no
+change: the writable directories come from Foundation
+(~/Library/Application Support/0ad and ~/Library/Caches/0ad, which on iOS are
+inside the app container), and RootData() returns the bundle's resources when
+the executable is a bundle -- on iOS it always is.
+
+The one thing that does not work is data *in* the bundle. An iOS bundle is read
+only and signed, and 3.5 GB of game data cannot go in it -- the same reason the
+Android port downloads the data on first start (patch 0010 there). So RootData()
+looks next to the rest of the writable data first, and only falls back to the
+bundle.
+
+Keeping the bundle as the fallback is deliberate: it is what makes a
+self-contained build possible, and that is how the smoke test runs, with the few
+megabytes of the "mod" mod inside the bundle and no download at all.
+
+--- source/ps/GameSetup/Paths.cpp
++++ source/ps/GameSetup/Paths.cpp
+@@ -42,6 +42,28 @@
+ #endif
+ 
+ 
++#if OS_IOS
++/**
++ * Where the game data ends up when it was downloaded rather than shipped.
++ *
++ * An iOS app bundle is read only and signed, so the 3.5 GB of game data cannot
++ * live in it -- the same reason the Android port downloads it on first start.
++ * The download goes next to the rest of the writable data, below
++ * ~/Library/Application Support/0ad (inside the app container), and this is
++ * where RootData() looks first. If it is not there, the bundle is used, which
++ * keeps a self-contained build possible: that is how the smoke test runs, with
++ * just the few MB of the "mod" mod inside the bundle.
++ */
++static OsPath IosDownloadedData()
++{
++	const std::string appSupport = osx_GetAppSupportPath();
++	if (appSupport.empty())
++		return OsPath();
++	return OsPath(appSupport) / "0ad" / "data"/"";
++}
++#endif
++
++
+ Paths::Paths(const CmdLineArgs& args)
+ {
+ 	m_root = Root(args.GetArg0());
+@@ -202,6 +224,18 @@
+ #ifdef INSTALLED_DATADIR
+ 	return OsPath(STRINGIZE(INSTALLED_DATADIR))/"";
+ #else
++
++# if OS_IOS
++	// Downloaded data wins over whatever is in the bundle.
++	{
++		const OsPath downloaded = IosDownloadedData();
++		if (!downloaded.empty() && DirectoryExists(downloaded))
++		{
++			debug_printf("Using downloaded game data\n");
++			return downloaded;
++		}
++	}
++# endif
+ 
+ # if OS_MACOSX
+ 	if (osx_IsAppBundleValid())

@@ -76,19 +76,73 @@ Two things are known before the first run:
 If probe 2 fails at `configure`, that is a build-system project of its own and
 not a port — the point of asking now is to find out before touching premake.
 
-## After the probes
+## The patches
 
-The plan is the Android port's, step for step:
+`tools/get-source.sh` fetches the 0 A.D. source release and applies the stack;
+all eleven apply cleanly and in order.
 
-* an iOS analogue of `0009-premake-android-target.patch` (all dependencies
-  static, one executable in the bundle instead of a `SharedLib` for a Java
-  activity),
-* an analogue of `0010-android-paths.patch`: the bundle is read-only, and
-  `$HOME` is the app container,
-* the touch layer and `mods/sfostouch` from the Sailfish port,
-* the game data downloaded on first start, as on Android,
-* and `pyrogenesis -mod=mod` as the smoke test, because the mod-selection
-  screen needs a few MB instead of 3.5 GB.
+| | |
+| --- | --- |
+| 0001 | guards the gloox include so `--without-lobby` works |
+| 0002 0003 | make the `--gles` path usable |
+| 0005 - 0008 | touch input and gestures. They ask `SDL_GetNumTouchDevices()` instead of naming a platform, so they switch themselves on here — nothing iOS-specific was needed |
+| 0007 | build only the release SpiderMonkey |
+| 0014 | `glMapBuffer` does not exist on OpenGL ES |
+| **0015** | premake's `--ios` |
+| **0016** | `OS_IOS`, and the three frameworks that are desktop-only |
+| **0017** | where the game data is when it was downloaded |
+
+0001-0008 come from the Sailfish port and 0014 from the Android one, copied
+rather than referenced so this tree builds on its own.
+
+**iOS is Darwin**, so `--ios` is not a new platform but a set of exceptions to
+the macosx target: `premake5 --os=macosx --ios`. The dylib naming, `-framework`
+linking, `lib/sysdep/os/osx` and the bundle layout are already right. What is
+left is small:
+
+* the architecture cannot be probed (`cc -dumpmachine` answers for the host),
+* `ApplicationServices` and `Cocoa` are the desktop; iOS has `Foundation` and
+  `UIKit`. The engine never calls ApplicationServices — the include in
+  `osx.cpp` is a leftover — and Cocoa only came in for Atlas,
+* `CoreServices`, which FCollada links "for a few utility functions", is not a
+  linkable framework on iOS; what it uses lives in CoreFoundation,
+* `FSEvents` does not exist, so directory watching does nothing,
+* `AppKit` in `osx_atlas.mm`: Atlas is a wxWidgets editor in a second process,
+  which iOS has no concept of.
+
+What did **not** need patching is the more interesting half: `extern_libs5.lua`
+is untouched. SDL2 and mozjs go through pkg-config like everywhere else; there
+is no `opengl` entry at all in 0.28, because glad resolves GL entry points at
+runtime through `SDL_GL_GetProcAddress`, so no GLES framework has to be named;
+iconv is in the SDK; and the writable directories already come from Foundation,
+which means `~/Library/Application Support/0ad` lands inside the app container
+by itself. The only real gap was data *in* the bundle — it is read-only and
+signed, so 3.5 GB cannot go there, the same reason Android downloads it on
+first start.
+
+Checked so far: `premake5 --os=macosx --ios --gles …` generates the whole
+project (on Linux, no Mac needed), and the link line comes out with
+`-framework CoreFoundation -framework Foundation -framework UIKit` and no trace
+of Cocoa or ApplicationServices.
+
+## Next: the dependencies
+
+0 A.D. ships `libraries/build-macos-libs.sh`, which builds every dependency
+into `libraries/macos/` and collects the `.pc` files in
+`libraries/macos/pkgconfig` — exactly where premake's macosx branch looks.
+Teaching *that* script an iOS mode is the job, rather than writing a new one:
+SYSROOT and `-target` instead of `-mmacosx-version-min`, `--host` for the
+autotools builds, `CMAKE_SYSTEM_NAME=iOS` for the CMake ones, and skipping what
+is switched off anyway (wxWidgets, gloox/gnutls/nettle/gmp, OpenAL/ogg/vorbis,
+miniupnpc, MoltenVK).
+
+What is needed, from the generated makefile rather than from guessing: SDL2,
+boost, fmt, freetype, icu (i18n and uc), libcurl, libenet, libpng, libsodium,
+libxml2, zlib, iconv — and SpiderMonkey, which is already built.
+
+One trap found on the way, now guarded in `tools/ios-build.sh`: **a failed
+pkg-config lookup is silent in premake.** The library simply disappears from the
+link line, and what you get is a few thousand undefined symbols much later.
 
 Unanswered either way: multiplayer, sound (iOS has no OpenAL to speak of), and
 how a JIT-less SpiderMonkey holds up in a real match.

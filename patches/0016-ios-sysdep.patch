@@ -1,0 +1,151 @@
+OS_IOS, and the three places where Darwin is not the desktop.
+
+The engine has no notion of iOS. Adding one as a *third* Apple platform would
+mean auditing every OS_MACOSX site; adding it **in addition** to OS_MACOSX
+means the opposite: everything that is true of Darwin stays true, and OS_IOS
+marks only the differences. There turn out to be three, all of them frameworks
+that exist on the desktop and not on the phone:
+
+* `ApplicationServices` in lib/sysdep/os/osx/osx.cpp. Nothing in that file uses
+  it -- the file only wants _NSGetExecutablePath and the bundle helpers -- so
+  the include is a leftover, and on iOS there is no such framework.
+
+* `AppKit` in osx_atlas.mm. Atlas is a wxWidgets editor in a second process,
+  started through NSWorkspace; none of that exists on iOS. The function keeps
+  its declaration so callers still link, and does nothing. It is never reached:
+  --without-atlas is the only configuration that makes sense here.
+
+* `FSEvents` in osx/dir_watch.cpp. iOS has CoreServices but not this part of
+  it. Directory watching is a desktop convenience -- it makes an edited mod
+  file show up without a restart -- so both entry points report success and do
+  nothing. The only caller discards the result (`(void)dir_watch_Add(...)` in
+  lib/file/common/real_directory.cpp) and never needs the watch pointer to be
+  filled in.
+
+What does *not* need touching is worth listing, because it is the reason this
+patch is short: osx_paths.mm and osx_bundle.mm use only Foundation, which is
+the same on both platforms, so NSSearchPathForDirectoriesInDomains keeps
+returning the right directories -- inside the app container on iOS. And
+osx_sys_version.mm compiles because AvailabilityMacros.h does not define
+MAC_OS_X_VERSION_MIN_REQUIRED when the target is iOS, so it takes its own
+fallback path; the value it then reports is only read by the dir_watch code
+that iOS does not compile.
+
+--- source/lib/sysdep/os.h
++++ source/lib/sysdep/os.h
+@@ -66,6 +66,21 @@
+ #else
+ # define OS_MACOSX 0
+ #endif
++// iOS and the iOS Simulator.
++// Deliberately *in addition* to OS_MACOSX rather than instead of it: iOS is
++// Darwin, and everything the engine does for Mach - the osx sysdep directory,
++// Foundation for the paths, the bundle layout - is right here too. OS_IOS
++// marks only the places where the desktop and the phone really differ.
++#if OS_MACOSX
++# include <TargetConditionals.h>
++# if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
++#  define OS_IOS 1
++# else
++#  define OS_IOS 0
++# endif
++#else
++# define OS_IOS 0
++#endif
+ // BSD
+ #if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__) || defined(__FreeBSD_kernel__)
+ # define OS_BSD 1
+--- source/lib/sysdep/os/osx/osx.cpp
++++ source/lib/sysdep/os/osx/osx.cpp
+@@ -27,7 +27,11 @@
+ #include "lib/utf8.h"
+ #include "osx_bundle.h"
+ 
+-#include <ApplicationServices/ApplicationServices.h>
++#if !OS_IOS
++// Nothing in this file uses ApplicationServices; the include is a leftover,
++// and on iOS the framework does not exist.
++# include <ApplicationServices/ApplicationServices.h>
++#endif
+ #include <AvailabilityMacros.h> // MAC_OS_X_VERSION_MIN_REQUIRED
+ #include <CoreFoundation/CoreFoundation.h>
+ #include <mach-o/dyld.h> // _NSGetExecutablePath
+--- source/lib/sysdep/os/osx/osx_atlas.mm
++++ source/lib/sysdep/os/osx/osx_atlas.mm
+@@ -21,13 +21,29 @@
+  */
+ 
+ #import <AvailabilityMacros.h> // MAC_OS_X_VERSION_MIN_REQUIRED
++#include "lib/sysdep/os.h"
++
++#if !OS_IOS
+ #import <AppKit/AppKit.h>
++#endif
+ 
+ #import "osx_atlas.h"
+ 
+ #include "lib/types.h"
+ #include "ps/CStr.h"
+ 
++#if OS_IOS
++
++// There is no Atlas on iOS: it is a wxWidgets application, it needs a second
++// process, and NSWorkspace exists only on the desktop. The declaration stays
++// so callers still link; it never gets called, because --without-atlas is the
++// only sensible configuration here.
++void startNewAtlasProcess([[maybe_unused]] const std::vector<CStr8>& mods)
++{
++}
++
++#else
++
+ void startNewAtlasProcess(const std::vector<CStr8>& mods)
+ {
+ 	NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
+@@ -49,3 +65,5 @@
+ 
+ 	[pool drain];
+ }
++
++#endif // !OS_IOS
+--- source/lib/sysdep/os/osx/dir_watch.cpp
++++ source/lib/sysdep/os/osx/dir_watch.cpp
+@@ -22,7 +22,32 @@
+ 
+ #include "precompiled.h"
+ 
++#include "lib/sysdep/os.h"
++
++#if OS_IOS
++
++// FSEvents is a macOS API; iOS has CoreServices but not this part of it. The
++// watches only exist so that editing a file in a mod shows up without a
++// restart, which is a desktop convenience -- so on iOS both entry points do
++// nothing and report success. dir_watch_Add's result is discarded by its only
++// caller (lib/file/common/real_directory.cpp) and the watch pointer may stay
++// empty.
++
+ #include "lib/sysdep/dir_watch.h"
++
++Status dir_watch_Add([[maybe_unused]] const OsPath& path, [[maybe_unused]] PDirWatch& dirWatch)
++{
++	return INFO::OK;
++}
++
++Status dir_watch_Poll([[maybe_unused]] DirWatchNotifications& notifications)
++{
++	return INFO::OK;
++}
++
++#else
++
++#include "lib/sysdep/dir_watch.h"
+ #include "lib/file/file_system.h"
+ #include "osx_sys_version.h"
+ 
+@@ -204,3 +229,5 @@
+ 
+ 	return INFO::OK;
+ }
++
++#endif // !OS_IOS

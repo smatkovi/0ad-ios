@@ -1,0 +1,68 @@
+Do not call glMapBuffer on OpenGL ES - it does not exist.
+
+UploadDynamicBufferRegionImpl orphans a dynamic vertex buffer and then maps
+it with glMapBufferARB. OpenGL ES has no glMapBuffer of any kind: ES 3.0
+offers glMapBufferRange and GL_OES_mapbuffer offers glMapBufferOES, but the
+ARB entry point is simply absent, so the loader leaves its pointer null and
+the call jumps to address zero.
+
+On the device that is a SIGSEGV with pc = 0 - the program counter itself,
+not a null dereference - and the stack reads:
+
+    pyrogenesis_main
+      CRenderer::RenderFrame
+        CSceneRenderer::PrepareScene            SceneRenderer.cpp:1152
+          CMiniMapTexture::RenderFinalTexture   MiniMapTexture.cpp:534
+            CMiniMapTexture::UpdateAndUploadEntities  MiniMapTexture.cpp:811
+              UploadDynamicBufferRegionImpl
+                pc 0x0
+
+The minimap uploads its entity vertices through this path every frame, and
+the minimap only exists once a match is running - which is why the menu was
+fine and loading into a match closed the app.
+
+On GLES the data is staged in a vector and handed over with one
+glBufferSubData instead. The buffer is still orphaned first, so the driver
+remains free to reallocate rather than wait for the previous contents, which
+was the point of the mapping in the first place.
+
+Both callers of UploadDynamicBufferRegionImpl go through this one function,
+so this covers the memcpy variant as well.
+
+The rest of the GL backend is careful about this: glDrawBuffer/glReadBuffer
+in Framebuffer.cpp and the whole fixed-function path in ShaderProgram.cpp are
+behind CONFIG2_GLES guards already. This one path was missed.
+
+--- source/renderer/backend/gl/DeviceCommandContext.cpp
++++ source/renderer/backend/gl/DeviceCommandContext.cpp
+@@ -137,6 +137,22 @@
+ 	glBufferDataARB(target, bufferSize, nullptr, GL_DYNAMIC_DRAW);
+ 	ogl_WarnIfError();
+ 
++#if CONFIG2_GLES
++	// OpenGL ES has no glMapBuffer at all. ES 3.0 offers glMapBufferRange and
++	// GL_OES_mapbuffer offers glMapBufferOES, but the ARB entry point used
++	// below simply does not exist, so the loader leaves its pointer null and
++	// calling it jumps to address zero - a SIGSEGV with pc = 0, from inside
++	// the minimap's entity upload, which is why this only ever happened after
++	// loading into a match.
++	//
++	// Stage the data and hand it over in one glBufferSubData. The buffer is
++	// still orphaned above, so the driver remains free to reallocate rather
++	// than wait for the previous contents.
++	std::vector<u8> staging(dataSize);
++	uploadFunction(staging.data());
++	glBufferSubDataARB(target, dataOffset, dataSize, staging.data());
++	ogl_WarnIfError();
++#else
+ 	while (true)
+ 	{
+ 		// (In theory, glMapBufferRange with GL_MAP_INVALIDATE_BUFFER_BIT could be used
+@@ -160,6 +176,7 @@
+ 		// and hope it will eventually succeed
+ 		LOGMESSAGE("glUnmapBuffer failed, trying again...\n");
+ 	}
++#endif
+ }
+ 
+ /**

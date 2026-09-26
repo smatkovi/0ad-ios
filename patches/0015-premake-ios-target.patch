@@ -1,0 +1,96 @@
+Teach premake an --ios option.
+
+iOS is Darwin, so the right base is not the Android branch but the macosx one:
+the dylib naming, the -framework linking, lib/sysdep/os/osx and the bundle
+layout are all correct already. premake is therefore run with
+`--os=macosx --ios`, and --ios only marks the handful of places where the
+desktop and the phone genuinely differ.
+
+Four of them, and that is all:
+
+* The architecture cannot be probed. The native branch runs `cc -dumpmachine`,
+  which answers for the host when the compiler is a cross-compiler, so --ios
+  sets arch/macos_arch itself (aarch64 / arm64). `-arch arm64` stays; what
+  separates the device from the simulator is the `-target` in the compiler
+  wrapper, not the architecture.
+
+* ApplicationServices and Cocoa are the macOS desktop. iOS has Foundation and
+  UIKit. Nothing in the engine actually calls ApplicationServices (the include
+  in lib/sysdep/os/osx/osx.cpp is unused - see patch 0016), and Cocoa only ever
+  came in for Atlas, which is off here.
+
+* FCollada links CoreServices "for a few utility functions". CoreServices is
+  not a linkable framework on iOS; what FCollada uses of it (CFString and
+  friends) lives in CoreFoundation.
+
+* The option itself, so premake stops with a clear message instead of silently
+  ignoring it.
+
+Not needed, which is worth writing down because the Android port did need all
+three: **extern_libs5.lua is untouched.** SDL2 and mozjs go through pkg-config
+on this platform like everywhere else; there is no `opengl` entry at all in
+0.28, because glad resolves GL entry points at runtime through
+SDL_GL_GetProcAddress, so no GLES framework has to be named; and iconv is in
+the iOS SDK.
+
+Nothing about `--macosx-version-min` had to change either: it only emits
+`-mmacosx-version-min` when the option is passed, and an iOS build must not
+pass it - the deployment version belongs in the wrapper's `-target`.
+
+--- build/premake/premake5.lua
++++ build/premake/premake5.lua
+@@ -42,6 +42,7 @@
+ newoption { category = "Pyrogenesis", trigger = "android", description = "Use non-working Android cross-compiling mode" }
+ newoption { category = "Pyrogenesis", trigger = "coverage", description = "Enable code coverage data collection (GCC only)" }
+ newoption { category = "Pyrogenesis", trigger = "gles", description = "Use non-working OpenGL ES 2.0 mode" }
++newoption { category = "Pyrogenesis", trigger = "ios", description = "Cross-compile for iOS or the iOS Simulator (use together with --os=macosx)" }
+ newoption { category = "Pyrogenesis", trigger = "minimal-flags", description = "Only set compiler/linker flags that are really needed. Has no effect on Windows builds" }
+ newoption { category = "Pyrogenesis", trigger = "outpath", description = "Location for generated project files", default="../workspaces/default" }
+ newoption { category = "Pyrogenesis", trigger = "sanitize-address", description = "Enable ASAN if available" }
+@@ -90,7 +91,13 @@
+ arch = "x86"
+ macos_arch = "x86_64"
+ 
+-if _OPTIONS["android"] then
++if _OPTIONS["ios"] then
++	-- iOS is Darwin, so everything below takes the macosx branches; only the
++	-- architecture cannot be probed, because the compiler is a cross-compiler
++	-- and -dumpmachine answers for the host.
++	arch = "aarch64"
++	macos_arch = "arm64"
++elseif _OPTIONS["android"] then
+ 	arch = "arm"
+ elseif os.istarget("windows") then
+ 	if os.getenv("HOSTTYPE") then
+@@ -1235,7 +1242,15 @@
+ 	elseif os.istarget("macosx") then
+ 
+ 		links { "pthread" }
+-		links { "ApplicationServices.framework", "Cocoa.framework", "CoreFoundation.framework" }
++		if _OPTIONS["ios"] then
++			-- ApplicationServices and Cocoa are the macOS desktop; iOS has
++			-- Foundation and UIKit instead. Nothing in the engine calls
++			-- ApplicationServices (see lib/sysdep/os/osx/osx.cpp, where the
++			-- include is unused), and Cocoa only came in for Atlas.
++			links { "CoreFoundation.framework", "Foundation.framework", "UIKit.framework" }
++		else
++			links { "ApplicationServices.framework", "Cocoa.framework", "CoreFoundation.framework" }
++		end
+ 
+ 		architecture(macos_arch)
+ 		buildoptions { "-arch " .. macos_arch }
+@@ -1472,7 +1487,13 @@
+ 
+ 		buildoptions { "-fno-strict-aliasing" }
+ 		-- On OSX, fcollada uses a few utility functions from coreservices
+-		links { "CoreServices.framework" }
++		if _OPTIONS["ios"] then
++			-- CoreServices is not a linkable framework on iOS; what FCollada
++			-- uses of it (CFString and friends) lives in CoreFoundation.
++			links { "CoreFoundation.framework" }
++		else
++			links { "CoreServices.framework" }
++		end
+ 
+ 		architecture(macos_arch)
+ 		buildoptions { "-arch " .. macos_arch }
