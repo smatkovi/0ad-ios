@@ -18,7 +18,7 @@ DEST=${1:-$HERE/ext/smoke-data}
 VER=${VER:-0.28.0}
 ARCHIVE="$HERE/ext/0ad-$VER-unix-data.tar.xz"
 
-if [ -e "$DEST/mods/mod/mod.zip" ]; then
+if [ -e "$DEST/mods/public/public.zip" ]; then
     echo "schon da: $DEST"
     exit 0
 fi
@@ -30,9 +30,13 @@ mkdir -p "$HERE/ext"
 
 rm -rf "$HERE/ext/unpack-data"
 mkdir -p "$HERE/ext/unpack-data"
+# public.zip is the game itself -- 3.5 GB unpacked, one file here. Without it
+# the base mod's main menu draws with every texture missing, which on screen is
+# a magenta rectangle and says nothing about whether the port works.
 tar xf "$ARCHIVE" -C "$HERE/ext/unpack-data" \
     "0ad-$VER/binaries/data/config" \
-    "0ad-$VER/binaries/data/mods/mod"
+    "0ad-$VER/binaries/data/mods/mod" \
+    "0ad-$VER/binaries/data/mods/public"
 
 mkdir -p "$DEST"
 cp -R "$HERE/ext/unpack-data/0ad-$VER/binaries/data/config" "$DEST/"
@@ -41,5 +45,6 @@ rm -rf "$HERE/ext/unpack-data"
 
 # The archive is 1.4 GB and CI caches only what came out of it.
 rm -f "$ARCHIVE"
+du -sh "$DEST"/mods/* 2>/dev/null || true
 
 du -sh "$DEST"
