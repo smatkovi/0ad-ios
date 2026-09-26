@@ -18,7 +18,13 @@ NAME=$(basename "$APP" .app)
 SDK_PATH=$(xcrun --sdk iphonesimulator --show-sdk-path)
 export PKG_CONFIG_LIBDIR="$PREFIX/lib/pkgconfig"
 CFLAGS=$(pkg-config --cflags sdl2)
-LIBS=$(pkg-config --static --libs sdl2)
+# sdl2.pc names only -lSDL2. On iOS the actual main() lives in SDL2main
+# (src/main/uikit/SDL_uikit_main.c): it sets up the UIApplication and then
+# calls SDL_main, which is what SDL.h has renamed our main() to. Without it
+# the link fails with an undefined _main and nothing else to go on.
+LIBS="-lSDL2main $(pkg-config --static --libs sdl2)"
+# GLES is deprecated on iOS since 12.0 and every single call says so.
+CFLAGS="$CFLAGS -DGLES_SILENCE_DEPRECATION" 
 
 rm -rf "$APP"
 mkdir -p "$APP"

@@ -1,0 +1,73 @@
+name: "Probe: SpiderMonkey"
+
+# Does SpiderMonkey 128 configure and build for aarch64-apple-ios-sim, without
+# a JIT? The Android port got mozjs from Termux; here there is nobody to get it
+# from, so this is the question the project hangs on.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'tools/build-mozjs-ios.sh'
+      - '.github/workflows/probe-mozjs.yml'
+
+jobs:
+  mozjs:
+    name: SpiderMonkey 128 for the simulator
+    runs-on: macos-14
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache the 0 A.D. source tarball
+        uses: actions/cache@v4
+        with:
+          path: ext/0ad-0.28.0-unix-build.tar.xz
+          key: zeroad-src-0.28.0
+
+      # Restored and saved separately so a failed attempt keeps its progress:
+      # the unpacked tree is cached too, and a retry resumes instead of
+      # downloading and patching again.
+      - name: Restore build state
+        id: cache-sm
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ext/spidermonkey-0.28.0
+            ext/prefix-sim-js
+          key: mozjs-128.13.0-iphonesimulator-v1
+
+      - name: Build SpiderMonkey
+        id: build
+        if: steps.cache-sm.outputs.cache-hit != 'true'
+        run: |
+          set -o pipefail
+          tools/build-mozjs-ios.sh iphonesimulator "$PWD/ext/prefix-sim-js" 2>&1 | tee mozjs.log
+
+      - name: Save build state
+        if: always() && steps.cache-sm.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ext/spidermonkey-0.28.0
+            ext/prefix-sim-js
+          key: mozjs-128.13.0-iphonesimulator-v1-${{ github.run_id }}
+
+      - name: Collect the interesting files
+        if: always()
+        run: |
+          mkdir -p out
+          cp mozjs.log out/ 2>/dev/null || true
+          find ext/spidermonkey-0.28.0 -name config.log -maxdepth 4 -exec cp {} out/ \; 2>/dev/null || true
+          ls -la ext/prefix-sim-js/lib 2>/dev/null || echo "(keine Bibliotheken)"
+          if [ -f ext/prefix-sim-js/lib/libmozjs128-release.a ]; then
+              tools/show-platform.sh ext/prefix-sim-js/lib/libmozjs128-release.a || true
+              lipo -info ext/prefix-sim-js/lib/libmozjs128-release.a
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mozjs-probe
+          path: out
