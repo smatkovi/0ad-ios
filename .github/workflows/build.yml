@@ -144,8 +144,13 @@ jobs:
               while [ "$(date +%s)" -lt $((START + seconds)) ]; do sleep 5; done
               xcrun simctl io "$DEV" screenshot "simulator-${seconds}s.png" || true
               echo "--- nach ${seconds}s:"
-              xcrun simctl spawn "$DEV" ps -o pid,%cpu,rss,etime,comm \
-                  | grep -i pyrogenesis || echo "(Prozess weg!)"
+              # On the host, not in the simulator: an app in the simulator is an
+              # ordinary process of the machine running it, and `simctl spawn ps`
+              # does not even find a ps in there ("No such file or directory" --
+              # which read like the app had died, and it had not).
+              ps -o pid,%cpu,rss,etime,comm -p \
+                  "$(pgrep -f 'pyrogenesis.app/pyrogenesis' | head -1)" \
+                  2>/dev/null || echo "(kein Prozess mehr)"
           done
           cp "simulator-240s.png" simulator.png || true
           CONTAINER=$(xcrun simctl get_app_container "$DEV" org.smatkovi.zeroad data)
