@@ -1,0 +1,51 @@
+An iOS app that runs is in front.
+
+The game starts, reaches its frame loop, and then does nothing: alive for four
+minutes on three percent of a core, the log stopped after renderer setup, the
+screen showing the renderer's clear colour.
+
+Frame() decides whether to do anything at all from
+
+    const bool needUpdate{g_app_has_focus || g_NetClient || !g_PauseOnFocusLoss};
+
+and with pauseonfocusloss on (the default) a frame without focus is ten
+milliseconds of sleep and no rendering. Renderer.cpp asks the same of
+g_app_minimized before drawing at all.
+
+SDL reports both states on iOS -- and on iOS neither can be true while the code
+is running to see it: an app that is not frontmost is suspended by the system.
+So they are ignored there. On the desktop nothing changes.
+
+Found by measuring rather than guessing: the process was alive the whole time
+and used 8 seconds of CPU in 240, which is neither a crash nor slowness but a
+sleep.
+
+--- source/ps/Globals.cpp
++++ source/ps/Globals.cpp
+@@ -50,7 +50,9 @@
+ 		switch(ev->ev.window.event)
+ 		{
+ 		case SDL_WINDOWEVENT_MINIMIZED:
++#if !OS_IOS
+ 			g_app_minimized = true;
++#endif
+ 			break;
+ 		case SDL_WINDOWEVENT_EXPOSED:
+ 		case SDL_WINDOWEVENT_RESTORED:
+@@ -60,7 +62,16 @@
+ 			g_app_has_focus = true;
+ 			break;
+ 		case SDL_WINDOWEVENT_FOCUS_LOST:
++#if !OS_IOS
++			// On iOS an app that is not frontmost does not run: the system
++			// suspends it. So "lost focus" and "minimized" are states this
++			// code can never actually observe from the inside -- but SDL does
++			// report them, and acting on them puts every frame into the
++			// non-focus path in main.cpp: ten milliseconds of sleep, no
++			// rendering. That looks exactly like a hung game and measures like
++			// one, at three percent of a core with nothing on screen.
+ 			g_app_has_focus = false;
++#endif
+ 			break;
+ 		case SDL_WINDOWEVENT_ENTER:
+ 			g_mouse_active = true;
