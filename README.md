@@ -5,9 +5,22 @@ Companion to [0ad-android](https://github.com/smatkovi/0ad-android) and
 same version, the same OpenGL ES path and the same touch layer — only the
 platform below it changes.
 
-**Status: two probes, nothing else yet.** Nothing has been ported. The two
-questions below decide what the port looks like, and both are cheaper to
-answer before a dependency stack exists than after.
+**Status: both probes are green.** Nothing is ported yet, but the two
+questions that decide the shape of the port are answered:
+
+| | answer |
+| --- | --- |
+| OpenGL ES in the simulator | **yes** — `GL_VERSION=OpenGL ES 2.0 APPLE-21.0.27`, the middle pixel came back `255,153,0`, exactly the triangle's colour. `GL_RENDERER=Apple Software Renderer`, so the simulator renders GLES **in software**: right pixels, no statement about speed. |
+| SpiderMonkey 128 for `aarch64-apple-ios-sim` | **yes** — "Your build was successful!" in four minutes, `libjs_static.a` and `libjsrust.a`, both stamped IOSSIMULATOR, built `--disable-jit`. |
+
+Two things got in the way, neither of them about iOS: `sdl2.pc` names only
+`-lSDL2` while the real `main()` lives in `SDL2main` (an undefined `_main` and
+nothing else to go on), and `configure` stopped on a missing **cbindgen**,
+which `mach` would normally fetch itself — `MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE=none`
+forbids that. One line each.
+
+A third cost half an hour of runner time: `simctl launch --console-pty`
+attached to a pipe instead of a terminal never returns.
 
 ## Why this is not simply the Android port again
 
