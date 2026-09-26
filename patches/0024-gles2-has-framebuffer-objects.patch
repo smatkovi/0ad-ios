@@ -1,0 +1,49 @@
+GLES 2.0 has framebuffer objects in core.
+
+The engine starts, sets up its GL context, and then refuses to run:
+
+    Your graphics card doesn't appear to be fully compatible with OpenGL
+    shaders. The game does not support pre-shader graphics cards.
+    Location: Device.cpp:340 (Create)
+
+The check behind that message asks, among other things, whether framebuffer
+objects exist:
+
+    !ogl_HaveExtension("GL_EXT_framebuffer_object")
+        && !ogl_HaveExtension("GL_ARB_framebuffer_object")
+
+FBOs have been part of core GLES since 2.0, and an ES driver never lists them
+under their desktop names -- so on a plain ES 2.0 context both come out false
+and the game gives up. ogl_HaveExtension does know about extensions that a core
+version subsumes, but these two are listed under have_30 only.
+
+Nobody notices on a device: real hardware reports ES 3.x, have_30 is true, and
+the desktop names match there. The iOS Simulator's software renderer reports
+ES 2.0, and there the check bites.
+
+--- source/lib/ogl.cpp
++++ source/lib/ogl.cpp
+@@ -123,6 +123,23 @@
+ 		MATCH(GL_ARB_point_sprite);
+ 		MATCH(GL_EXT_blend_equation_separate);
+ 	}
++#if CONFIG2_GLES
++	if(have_20)
++	{
++		// GLES 2.0 has framebuffer objects in core, and an ES driver never
++		// lists them under their desktop names -- so the renderer's check for
++		// "are there FBOs" comes out false on a plain ES 2.0 context and the
++		// game refuses to start with "your graphics card doesn't appear to be
++		// fully compatible with OpenGL shaders" (Device.cpp).
++		//
++		// It goes unnoticed on real hardware, where the driver reports ES 3.x
++		// and have_30 already matches these names below. The iOS Simulator's
++		// software renderer reports ES 2.0, and there the check bites.
++		MATCH(GL_EXT_framebuffer_object);
++		MATCH(GL_ARB_framebuffer_object);
++	}
++#endif
++
+ 	if(have_15)
+ 	{
+ 		MATCH(GL_ARB_vertex_buffer_object);

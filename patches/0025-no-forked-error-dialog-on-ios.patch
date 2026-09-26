@@ -1,0 +1,39 @@
+Do not fork an error dialog on iOS.
+
+sys_display_error shows its message by forking and exec'ing /usr/bin/xmessage.
+On iOS there is no xmessage, the exec fails, and the child carries on running
+the engine's code with half a UIKit inherited from a process it is no longer
+part of. It died 134 ms after the fork, inside CoreAnimation's commit:
+
+    _dispatch_main_queue_push <- dispatch_async
+    <- -[_UIAfterCACommitQueue _enqueueCommitResponse:forPhase:]
+    <- CA::Transaction::commit()  ...  UIApplicationMain
+
+That is a crash report for a problem that was only being *reported* - and it
+cost a while to see, because the parent went on running and writing its logs,
+so the run looked like a game that crashed while playing.
+
+DEBUG_DISPLAY_ERROR logs the message before calling here, so reporting "not
+implemented" loses nothing.
+
+--- source/lib/sysdep/os/unix/unix.cpp
++++ source/lib/sysdep/os/unix/unix.cpp
+@@ -98,6 +98,18 @@
+ 	// since xmessage doesn't do that and it'll get clamped
+ 	// to the screen width
+ 
++#if OS_IOS
++	// No xmessage, no second process: iOS lets an app fork but almost nothing
++	// is allowed afterwards without an exec, and the child here inherits half
++	// a UIKit. It crashed 134 ms after the fork, inside CoreAnimation's commit
++	// -- a crash report for a problem that was only being *reported*.
++	//
++	// The message is in the log either way (this function is called from
++	// DEBUG_DISPLAY_ERROR, which logs first), so saying "not implemented" is
++	// both true and enough.
++	return ERI_NOT_IMPLEMENTED;
++#endif
++
+ 	const char* cmd = "/usr/bin/xmessage";
+ 
+ 	char buttons[256] = "";
