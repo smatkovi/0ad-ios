@@ -125,6 +125,35 @@ project (on Linux, no Mac needed), and the link line comes out with
 `-framework CoreFoundation -framework Foundation -framework UIKit` and no trace
 of Cocoa or ApplicationServices.
 
+## It runs
+
+**0 A.D. starts, loads the whole game and draws on iOS.** The simulator shows
+its first-launch dialog -- "Thank you for installing 0 A.D. Empires Ascendant!"
+-- over the main menu artwork: the GUI, the fonts, the textures and the GUI's
+JavaScript on a SpiderMonkey without a JIT, all of it working.
+
+It draws sideways in a corner, because the drawable is landscape (2556x1179)
+on a simulator screen that stays portrait: a headless simulator never rotates.
+A device does.
+
+The last three things in the way were each invisible from the outside, and each
+took measuring rather than guessing:
+
+| | |
+| --- | --- |
+| The frame loop ran inside a run-loop timer callback and re-entered the run loop from there. `SDL_main` now hands the frame to UIKit and returns | 0023 |
+| The window asked to be resizable and not fullscreen, and never asked for ALLOW_HIGHDPI. On iOS a window *is* the screen | 0027 |
+| **The backbuffer is not framebuffer zero.** A CAEAGLLayer is fed through a framebuffer object SDL makes with the context; binding zero is legal and draws nowhere, silently, at full speed | 0028 |
+
+The last one is the one to remember. The engine says so itself --
+"Backbuffer for GL is a special case with a zero framebuffer" -- and it is true
+everywhere except here. It cost eleven runs, most of them spent on instruments
+that lied: `simctl spawn ps` finds no ps inside the runtime, `ps -p` printed a
+bare header for a live pid, and the stdout of an app started with `simctl
+launch` goes nowhere at all. What settled it was writing the evidence into a
+file in the app container and reading the buffer back after a bare clear:
+black, with GL_INVALID_ENUM.
+
 ## The dependencies, and the engine
 
 **`pyrogenesis` builds and links for the iOS Simulator**: 71 MB, arm64, stamped
