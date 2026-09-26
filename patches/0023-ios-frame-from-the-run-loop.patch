@@ -37,7 +37,7 @@ loop to nest in.
 
 --- source/main.cpp
 +++ source/main.cpp
-@@ -555,6 +555,54 @@
+@@ -555,6 +555,58 @@
  
  // moved into a helper function to ensure args is destroyed before
  // exit(), which may result in a memory leak.
@@ -67,7 +67,10 @@ loop to nest in.
 +{
 +	FileLogger logger;
 +	std::optional<ScriptInterface> guiScriptInterface;
-+	std::optional<RL::Interface> rlInterface;
++	// A pointer, because RL::Interface is neither copyable nor movable: it can
++	// only be built where it is going to stay. (That is also why the desktop
++	// code below wraps its construction in a lambda -- see the comment there.)
++	std::optional<RL::Interface>* rlInterface{nullptr};
 +	int fixedFrameFrequency{0};
 +};
 +
@@ -83,7 +86,8 @@ loop to nest in.
 +		SDL_iPhoneSetAnimationCallback(g_VideoMode.GetWindow(), 1, nullptr, nullptr);
 +		return;
 +	}
-+	Frame(g_IosSession->rlInterface ? &*g_IosSession->rlInterface : nullptr,
++	std::optional<RL::Interface>* const rlInterface{g_IosSession->rlInterface};
++	Frame(rlInterface && *rlInterface ? &**rlInterface : nullptr,
 +		g_IosSession->fixedFrameFrequency);
 +}
 +}
@@ -92,7 +96,7 @@ loop to nest in.
  static void RunGameOrAtlas(const std::span<const char* const> argv)
  {
  	const CmdLineArgs args(argv);
-@@ -698,7 +746,13 @@
+@@ -698,7 +750,13 @@
  
  		// This must come after VFS init, which sets the current directory (required for finding our
  		// output log files).
@@ -106,7 +110,7 @@ loop to nest in.
  
  		if (!Init(args, std::exchange(firstIteration, false) ? INIT_MODS : 0))
  		{
-@@ -731,7 +785,12 @@
+@@ -731,7 +789,12 @@
  		std::optional<DAP::Interface> dapInterface{CreateDAPInterface(args)};
  #endif // CONFIG2_DAP_INTERFACE
  
@@ -119,17 +123,21 @@ loop to nest in.
  
  		if (isVisual)
  		{
-@@ -753,6 +812,25 @@
- 						return std::nullopt;
- 				}()};
+@@ -744,6 +807,29 @@
  
+ 		try
+ 		{
 +#if OS_IOS
 +			if (isVisual)
 +			{
-+				// emplace, not assignment: RL::Interface can be moved into
-+				// place but has no move assignment.
-+				if (rlInterface)
-+					g_IosSession->rlInterface.emplace(std::move(*rlInterface));
++				g_IosSession->rlInterface = new std::optional<RL::Interface>{
++					[&]() -> std::optional<RL::Interface>
++					{
++						if (g_Shutdown == ShutdownType::None)
++							return CreateRLInterface(args);
++						else
++							return std::nullopt;
++					}()};
 +				g_IosSession->fixedFrameFrequency = fixedFrameFrequency;
 +				if (SDL_iPhoneSetAnimationCallback(g_VideoMode.GetWindow(), 1,
 +						&IosFrameCallback, nullptr) != 0)
@@ -142,10 +150,10 @@ loop to nest in.
 +			// no run-loop problem either: it never pumps events.
 +#endif
 +
- 			while (g_Shutdown == ShutdownType::None)
- 			{
- 				if (isVisual)
-@@ -837,6 +915,15 @@
+ 			// MSVC doesn't support copy elision in ternary expressions. So we use a lambda instead.
+ 			std::optional<RL::Interface> rlInterface{[&]() -> std::optional<RL::Interface>
+ 				{
+@@ -837,6 +923,15 @@
  	{
  		g_ExitStatus = EXIT_FAILURE;
  	}
