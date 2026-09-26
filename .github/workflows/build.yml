@@ -19,6 +19,8 @@ on:
       - 'tools/build-mozjs-ios.sh'
       - 'tools/ios-build.sh'
       - 'tools/show-platform.sh'
+      - 'tools/make-app.sh'
+      - 'tools/get-mod-data.sh'
       - '.github/workflows/build.yml'
 
 jobs:
@@ -84,6 +86,67 @@ jobs:
           ls -la "$SRC/binaries/system" || true
           tools/show-platform.sh "$SRC/binaries/system/pyrogenesis" || true
 
+      # The base mod is 89 MB inside a 1.4 GB data release, so it is fetched
+      # once and cached, not kept in the repository.
+      - name: Cache the base mod
+        id: cache-mod
+        uses: actions/cache@v4
+        with:
+          path: ext/smoke-data
+          key: smoke-data-0.28.0
+
+      - name: Fetch the base mod
+        if: steps.cache-mod.outputs.cache-hit != 'true'
+        run: tools/get-mod-data.sh
+
+      - name: Bundle it
+        run: tools/make-app.sh "$SRC" "$PWD/ext/smoke-data" "$PWD/build/pyrogenesis.app"
+
+      - name: Run it in the simulator
+        id: smoke
+        run: |
+          set -x
+          DEV=""
+          for name in "iPhone 16" "iPhone 15" "iPhone 14"; do
+              DEV=$(xcrun simctl create zeroad "$name" 2>/dev/null) && break
+              DEV=""
+          done
+          test -n "$DEV"
+          xcrun simctl boot "$DEV"
+          xcrun simctl bootstatus "$DEV" -b
+          xcrun simctl install "$DEV" "$PWD/build/pyrogenesis.app"
+          # Not --console-pty: attached to a pipe it never returns (the GLES
+          # probe sat in it for half an hour). The game says what happened in
+          # its own logs, and the system log has its stdout.
+          xcrun simctl launch "$DEV" org.smatkovi.zeroad -mod=mod
+          # The simulator renders GLES in software and SpiderMonkey has no JIT,
+          # so give it room: this is not a benchmark, only a sign of life.
+          sleep 90
+          xcrun simctl io "$DEV" screenshot simulator.png || true
+          CONTAINER=$(xcrun simctl get_app_container "$DEV" org.smatkovi.zeroad data)
+          mkdir -p out
+          cp -R "$CONTAINER/Library/Application Support/0ad/logs" out/logs || true
+          xcrun simctl spawn "$DEV" log show --last 5m --style compact \
+              --predicate 'process == "pyrogenesis"' > out/system-log.txt 2>&1 || true
+          # A crash lands here rather than in the game's own logs.
+          cp ~/Library/Logs/DiagnosticReports/pyrogenesis* out/ 2>/dev/null || true
+          xcrun simctl shutdown "$DEV" || true
+
+      - name: What the game said
+        if: always()
+        run: |
+          echo "--- system_info.txt"
+          cat "out/logs/system_info.txt" 2>/dev/null || echo "(keine -- so weit kam es nicht)"
+          echo "--- mainlog"
+          sed -e 's/<[^>]*>//g' out/logs/mainlog.html 2>/dev/null | tail -60 || true
+          echo "--- Absturzbericht?"
+          ls out/*.ips 2>/dev/null && head -40 out/*.ips || echo "(keiner)"
+          echo "--- Systemprotokoll"
+          tail -40 out/system-log.txt 2>/dev/null || true
+          # system_info.txt is written once the window and the GL context stand,
+          # so it is the honest marker for "the engine started".
+          test -f "out/logs/system_info.txt"
+
       - name: Collect the logs
         if: always()
         run: |
@@ -102,4 +165,6 @@ jobs:
         if: always()
         with:
           name: simulator-build
-          path: out
+          path: |
+            out
+            simulator.png
