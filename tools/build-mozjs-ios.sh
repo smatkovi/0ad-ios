@@ -72,6 +72,12 @@ fi
 
 rustup target add "$TRIPLE"
 
+# cbindgen generates the C headers for the Rust parts and runs on the *host*.
+# mach would fetch it itself through `mach bootstrap`, but that is exactly what
+# MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE=none forbids, so configure stops with
+# "Cannot find cbindgen" -- nothing to do with iOS.
+command -v cbindgen > /dev/null || cargo install cbindgen --locked
+
 cd "$FOLDER"
 export MOZ_NOSPAM=1
 export CFLAGS="$CFLAGS -w"
