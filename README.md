@@ -125,24 +125,53 @@ project (on Linux, no Mac needed), and the link line comes out with
 `-framework CoreFoundation -framework Foundation -framework UIKit` and no trace
 of Cocoa or ApplicationServices.
 
-## Next: the dependencies
+## The dependencies, and the engine
 
-0 A.D. ships `libraries/build-macos-libs.sh`, which builds every dependency
-into `libraries/macos/` and collects the `.pc` files in
-`libraries/macos/pkgconfig` — exactly where premake's macosx branch looks.
-Teaching *that* script an iOS mode is the job, rather than writing a new one:
-SYSROOT and `-target` instead of `-mmacosx-version-min`, `--host` for the
-autotools builds, `CMAKE_SYSTEM_NAME=iOS` for the CMake ones, and skipping what
-is switched off anyway (wxWidgets, gloox/gnutls/nettle/gmp, OpenAL/ogg/vorbis,
-miniupnpc, MoltenVK).
+**`pyrogenesis` builds and links for the iOS Simulator**: 71 MB, arm64, stamped
+IOSSIMULATOR. `.github/workflows/build.yml` does it end to end on a `macos-14`
+runner, from the source tarball to the binary.
 
-What is needed, from the generated makefile rather than from guessing: SDL2,
-boost, fmt, freetype, icu (i18n and uc), libcurl, libenet, libpng, libsodium,
-libxml2, zlib, iconv — and SpiderMonkey, which is already built.
+There is no Termux here, so every dependency is built against the SDK - but not
+by a new script: 0 A.D. ships `libraries/build-macos-libs.sh`, which already
+downloads, patches, configures and installs all of them for macOS and collects
+the `.pc` files in `libraries/macos/pkgconfig`, exactly where premake's macosx
+branch looks. Patch 0018 gives it an `IOS_SDK` mode.
 
-One trap found on the way, now guarded in `tools/ios-build.sh`: **a failed
-pkg-config lookup is silent in premake.** The library simply disappears from the
-link line, and what you get is a few thousand undefined symbols much later.
+Built: zlib, libcurl, libiconv, libxml2, SDL2 (with the uikit backend), Boost
+(headers), libpng, freetype, ICU, ENet, libsodium, fmt, and SpiderMonkey 128.
+Skipped by name: wxWidgets (Atlas), gmp/nettle/gnutls/gloox (lobby),
+ogg/vorbis/openal (sound), miniupnpc, MoltenVK, FCollada and NVTT.
+
+### What actually went wrong, in order
+
+Not one of these was "iOS cannot do this". Every single one was a tool seeing
+the wrong flags, or a header path pointing somewhere else:
+
+| | |
+| --- | --- |
+| curl: "We can't compile without socket() support!" | `-isysroot` was missing from `CPPFLAGS`, and a good number of configure tests run the preprocessor alone. "socket can be linked: yes", "socket is prototyped: no" |
+| libpng | three configure calls *replace* `CPPFLAGS` instead of appending |
+| SDL2 | CMake 4 refuses the 2022 CMakeLists; 2.32.8 instead |
+| ICU, first pass | the native build got the iOS flags and could not be executed |
+| ICU, second pass | `pkgdata` calls `system()`, unavailable on iOS; the target needs no tools |
+| FCollada | wants Carbon's `MPCriticalRegionID`; the Collada module is left out |
+| premake | was being built with the iOS wrappers - a host tool |
+| `enet/enet.h` not found | the lobby stub's `extern_libs` never named enet; only noticed where enet is not in a default include path |
+| `_moz_set_max_dirty_page_modifier` | our `--disable-shared-js` deviated from 0 A.D.'s mozconfig |
+| `_main` | SDL2main, the same trap as the GLES probe |
+| `be_memory_inline_jit_restrict_rwx_*` | BrowserEngineCore, Apple's W^X interface since iOS 17.4 |
+| `iterator_buffer::flush()` | **a real bug in 0 A.D.**: the fmt fallback in `StringBuilder.h` includes `core.h`, the definition is in `format.h` |
+| duplicate zlib symbols | SpiderMonkey bundles its own zlib; `--with-system-zlib` |
+| `MOZ_Z_compress` | SpiderMonkey's `zlib.h` renames everything to `MOZ_Z_*`; 0 A.D. removes those headers - in its Windows branch only |
+
+Two of these are worth sending upstream: the `StringBuilder.h` include and the
+missing `enet` in the lobby stub's library list.
+
+## Next
+
+The `.app` bundle and `pyrogenesis -mod=mod` in the simulator - the mod
+selection screen needs a few MB instead of 3.5 GB, which makes it the right
+first thing to look at.
 
 Unanswered either way: multiplayer, sound (iOS has no OpenAL to speak of), and
 how a JIT-less SpiderMonkey holds up in a real match.
