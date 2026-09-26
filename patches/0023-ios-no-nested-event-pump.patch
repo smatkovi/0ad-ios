@@ -1,0 +1,59 @@
+Prove where the crash comes from: stop nesting the run loop.
+
+The engine starts, the GL context stands, the config is read, the frame loop is
+reached -- and about four seconds later:
+
+    EXC_BAD_ACCESS, KERN_INVALID_ADDRESS at 0x110
+      libdispatch  <- __CFRunLoopRun <- CFRunLoopRunSpecific
+      <- UIKit_PumpEvents <- SDL_PumpEventsInternal <- SDL_WaitEventTimeout
+      <- PumpEvents() / Frame() / RunGameOrAtlas()      main.cpp:762
+      <- SDL_main                                       main.cpp:842
+      <- -[SDLUIKitDelegate postFinishLaunch]
+      <- __NSFireDelayedPerform <- __CFRunLoopDoTimer <- __CFRunLoopRun
+
+Read it from the bottom: SDL starts SDL_main from a run-loop *timer callback*,
+0 A.D. never gives control back, and SDL_PollEvent then enters the very same run
+loop a second time from inside that callback (UIKit_PumpEvents calls
+CFRunLoopRunInMode). The nesting is the only thing here that no other platform
+does.
+
+This patch switches SDL's iOS pump off. It is a measurement, not a fix: with the
+pump off no events reach SDL at all, so nothing can be touched -- but if the
+crash goes away and the game draws, the diagnosis is settled.
+
+The fix that follows is to turn the loop around: hand the frame to UIKit with
+SDL_iPhoneSetAnimationCallback and return from SDL_main, so each frame starts
+*from* the run loop instead of being wrapped inside it. That moves every local
+of RunGameOrAtlas onto the heap, which is why it is worth knowing first that it
+is the right thing to spend that change on.
+
+--- source/main.cpp
++++ source/main.cpp
+@@ -742,6 +742,27 @@
+ 		else if (!InitNonVisual(args))
+ 			g_Shutdown = ShutdownType::Quit;
+ 
++#if OS_IOS
++		// SDL starts SDL_main from a run-loop timer callback
++		// (-[SDLUIKitDelegate postFinishLaunch]), so the frame loop below runs
++		// *inside* the CFRunLoop -- and SDL_PollEvent then enters that same run
++		// loop a second time from in there, because UIKit_PumpEvents calls
++		// CFRunLoopRunInMode. A few seconds of that and libdispatch dereferences
++		// a null pointer:
++		//
++		//   EXC_BAD_ACCESS at 0x110 in libdispatch, from __CFRunLoopRun,
++		//   from UIKit_PumpEvents, from PumpEvents() (main.cpp)
++		//
++		// Switching the pump off proves where the crash comes from and lets the
++		// game render; it also means no events at all reach SDL, so nothing can
++		// be touched. The real fix is to turn the loop around -- hand the frame
++		// to UIKit with SDL_iPhoneSetAnimationCallback and return from SDL_main,
++		// so a frame starts *from* the run loop instead of being wrapped in it.
++		// That moves every local below onto the heap, which is why it is a
++		// separate step.
++		SDL_iPhoneSetEventPump(SDL_FALSE);
++#endif
++
+ 		try
+ 		{
+ 			// MSVC doesn't support copy elision in ternary expressions. So we use a lambda instead.
