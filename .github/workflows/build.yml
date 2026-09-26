@@ -156,6 +156,9 @@ jobs:
           # system_info.txt is written once the window and the GL context stand,
           # so it is the honest marker for "the engine started".
           test -f "out/logs/system_info.txt"
+          # And a crash report means it did not survive, whatever the logs say.
+          # The job reported success twice while the game was dying.
+          ! ls out/*.ips > /dev/null 2>&1
 
       - name: Collect the logs
         if: always()

@@ -30,6 +30,13 @@ interface, the RL interface. Those move into one session object that is created
 once and never destroyed -- iOS ends the process, it does not unwind it. For the
 same reason the shutdown in main() is skipped while the game is still running.
 
+Three more locals have to stay as well, and finding that out cost a round:
+ScriptEngine, CXeromycesEngine and the task manager stand before the loop and
+shut SpiderMonkey, libxml2 and the threads down in their destructors. Returning
+past them tore those down under the running game -- the next frame died in
+js::Thread::join and in xmlRelaxNGNewValidCtxt, deep inside the shader loader.
+They are built to stay now, like the session.
+
 The restart path (do/while over ShutdownType::Restart, used after installing a
 mod) is not taken on iOS: the callback unregisters itself instead. Non-visual
 runs keep the old loop, having neither a window to hang a frame on nor a run
@@ -96,7 +103,31 @@ loop to nest in.
  static void RunGameOrAtlas(const std::span<const char* const> argv)
  {
  	const CmdLineArgs args(argv);
-@@ -698,7 +750,13 @@
+@@ -627,11 +679,22 @@
+ 
+ 	// We need to initialize SpiderMonkey and libxml2 in the main thread before
+ 	// any thread uses them. So initialize them here before we might run Atlas.
++	// Initialise the global task manager at this point (JS & Profiler2 are set up).
++#if OS_IOS
++	// All three shut their subsystem down in their destructor, and on iOS this
++	// function returns while the game keeps running (see IosSession). Letting
++	// them go out of scope tore SpiderMonkey and libxml2 down under the running
++	// game: the next frame crashed in js::Thread::join and in
++	// xmlRelaxNGNewValidCtxt. So they are built to stay, like the session.
++	new ScriptEngine{};
++	new CXeromycesEngine{};
++	new Threading::TaskManager{};
++#else
+ 	ScriptEngine scriptEngine;
+ 	CXeromycesEngine xeromycesEngine;
+ 
+-	// Initialise the global task manager at this point (JS & Profiler2 are set up).
+ 	Threading::TaskManager taskManager;
++#endif
+ 
+ 	if (ATLAS_RunIfOnCmdLine(args, false))
+ 		return;
+@@ -698,7 +761,13 @@
  
  		// This must come after VFS init, which sets the current directory (required for finding our
  		// output log files).
@@ -110,7 +141,7 @@ loop to nest in.
  
  		if (!Init(args, std::exchange(firstIteration, false) ? INIT_MODS : 0))
  		{
-@@ -731,7 +789,12 @@
+@@ -731,7 +800,12 @@
  		std::optional<DAP::Interface> dapInterface{CreateDAPInterface(args)};
  #endif // CONFIG2_DAP_INTERFACE
  
@@ -123,7 +154,7 @@ loop to nest in.
  
  		if (isVisual)
  		{
-@@ -744,6 +807,29 @@
+@@ -744,6 +818,29 @@
  
  		try
  		{
@@ -153,7 +184,7 @@ loop to nest in.
  			// MSVC doesn't support copy elision in ternary expressions. So we use a lambda instead.
  			std::optional<RL::Interface> rlInterface{[&]() -> std::optional<RL::Interface>
  				{
-@@ -837,6 +923,15 @@
+@@ -837,6 +934,15 @@
  	{
  		g_ExitStatus = EXIT_FAILURE;
  	}
