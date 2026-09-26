@@ -137,6 +137,16 @@ mkdir -p "$PREFIX/lib" "$PREFIX/include-release"
 cp -L "$LIB" "$PREFIX/lib/libmozjs128-release.a"
 cp -L "$RUST_LIB" "$PREFIX/lib/libmozjs128-rust.a"
 cp -R -L build-release/dist/include/* "$PREFIX/include-release/"
+
+# SpiderMonkey copies its own zlib headers into dist/include, and those rename
+# every zlib entry point to MOZ_Z_*. The engine then includes that zlib.h
+# instead of the real one and the link ends in undefined MOZ_Z_compress,
+# MOZ_Z_uncompress, MOZ_Z_compressBound. 0 A.D.'s own build.sh removes exactly
+# these three -- but only in its Windows branch (bug #776126).
+rm -f "$PREFIX/include-release/mozzconf.h" \
+      "$PREFIX/include-release/zconf.h" \
+      "$PREFIX/include-release/zlib.h"
+
 echo "$PV+ios" > "$PREFIX/.already-built"
 
 echo "--- Ergebnis:"
