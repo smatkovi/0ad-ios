@@ -30,6 +30,14 @@ interface, the RL interface. Those move into one session object that is created
 once and never destroyed -- iOS ends the process, it does not unwind it. For the
 same reason the shutdown in main() is skipped while the game is still running.
 
+The registration itself has to wait one turn of the run loop. SDL hangs its
+CADisplayLink on view.window.screen, and while SDL_main is still running UIKit
+has not put the window on a screen yet -- the link comes out nil and not one
+frame is ever drawn. The app then sits there alive and idle, which measures very
+clearly once measured at all: seven seconds of CPU in four minutes, a log that
+stops growing, and the renderer's clear colour on screen. dispatch_async puts
+the registration after the return from SDL_main, where the window is in place.
+
 Three more locals have to stay as well, and finding that out cost a round:
 ScriptEngine, CXeromycesEngine and the task manager stand before the loop and
 shut SpiderMonkey, libxml2 and the threads down in their destructors. Returning
@@ -44,11 +52,13 @@ loop to nest in.
 
 --- source/main.cpp
 +++ source/main.cpp
-@@ -555,6 +555,58 @@
+@@ -555,6 +555,81 @@
  
  // moved into a helper function to ensure args is destroyed before
  // exit(), which may result in a memory leak.
 +#if OS_IOS
++#include <dispatch/dispatch.h>
++
 +namespace
 +{
 +/**
@@ -83,6 +93,27 @@ loop to nest in.
 +
 +IosSession* g_IosSession{nullptr};
 +
++void IosFrameCallback(void*);
++
++/**
++ * Registering the frame callback has to wait for the next turn of the run loop.
++ *
++ * SDL hangs its CADisplayLink on view.window.screen, and while SDL_main is
++ * still running UIKit has not put the window on a screen yet -- the link comes
++ * out nil and no frame is ever drawn. The app then sits there alive and idle:
++ * seven seconds of CPU in four minutes, a log that stops growing, and a screen
++ * showing the renderer's clear colour.
++ *
++ * dispatch_async puts it after the return from SDL_main, which is exactly when
++ * the window is in place.
++ */
++void IosStartFrames(void*)
++{
++	if (SDL_iPhoneSetAnimationCallback(g_VideoMode.GetWindow(), 1,
++			&IosFrameCallback, nullptr) != 0)
++		LOGERROR("Cannot hand the frame to UIKit: %s", SDL_GetError());
++}
++
 +void IosFrameCallback(void*)
 +{
 +	if (g_Shutdown != ShutdownType::None)
@@ -103,7 +134,7 @@ loop to nest in.
  static void RunGameOrAtlas(const std::span<const char* const> argv)
  {
  	const CmdLineArgs args(argv);
-@@ -627,11 +679,22 @@
+@@ -627,11 +702,22 @@
  
  	// We need to initialize SpiderMonkey and libxml2 in the main thread before
  	// any thread uses them. So initialize them here before we might run Atlas.
@@ -127,7 +158,7 @@ loop to nest in.
  
  	if (ATLAS_RunIfOnCmdLine(args, false))
  		return;
-@@ -698,7 +761,13 @@
+@@ -698,7 +784,13 @@
  
  		// This must come after VFS init, which sets the current directory (required for finding our
  		// output log files).
@@ -141,7 +172,7 @@ loop to nest in.
  
  		if (!Init(args, std::exchange(firstIteration, false) ? INIT_MODS : 0))
  		{
-@@ -731,7 +800,12 @@
+@@ -731,7 +823,12 @@
  		std::optional<DAP::Interface> dapInterface{CreateDAPInterface(args)};
  #endif // CONFIG2_DAP_INTERFACE
  
@@ -154,7 +185,7 @@ loop to nest in.
  
  		if (isVisual)
  		{
-@@ -744,6 +818,29 @@
+@@ -744,6 +841,27 @@
  
  		try
  		{
@@ -170,9 +201,7 @@ loop to nest in.
 +							return std::nullopt;
 +					}()};
 +				g_IosSession->fixedFrameFrequency = fixedFrameFrequency;
-+				if (SDL_iPhoneSetAnimationCallback(g_VideoMode.GetWindow(), 1,
-+						&IosFrameCallback, nullptr) != 0)
-+					LOGERROR("Cannot hand the frame to UIKit: %s", SDL_GetError());
++				dispatch_async_f(dispatch_get_main_queue(), nullptr, &IosStartFrames);
 +				// Everything below this point belongs to the shutdown of a run
 +				// that has ended. This one has not even started drawing yet.
 +				return;
@@ -184,7 +213,7 @@ loop to nest in.
  			// MSVC doesn't support copy elision in ternary expressions. So we use a lambda instead.
  			std::optional<RL::Interface> rlInterface{[&]() -> std::optional<RL::Interface>
  				{
-@@ -837,6 +934,15 @@
+@@ -837,6 +955,15 @@
  	{
  		g_ExitStatus = EXIT_FAILURE;
  	}
