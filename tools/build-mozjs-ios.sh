@@ -99,6 +99,17 @@ OPTIONS="--target=$TRIPLE
     --disable-jit
     --enable-optimize"
 
+# SpiderMonkey bundles a zlib and links it into js_static.a. 0 A.D.'s own
+# build.sh passes --with-system-zlib on Darwin for that reason; without it the
+# engine link ends in five duplicate symbols (adler32_z, crc32_z, ...) between
+# libmozjs128-release.a and our own libz.a. Only when a PKG_CONFIG_LIBDIR is
+# given, so that it cannot pick up the host's zlib by accident -- the probe
+# workflow runs this script without one and keeps the bundled copy.
+if [ -n "$PKG_CONFIG_LIBDIR" ] && pkg-config --exists zlib 2>/dev/null; then
+    OPTIONS="$OPTIONS
+    --with-system-zlib"
+fi
+
 echo "--- configure/build: $TRIPLE"
 set -x
 MOZCONFIG="$(pwd)/../mozconfig" \

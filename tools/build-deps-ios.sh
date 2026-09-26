@@ -46,7 +46,10 @@ if ! ( cd "$SRC/libraries" && IOS_SDK="$SDK" sh ./build-macos-libs.sh "$JOBS" );
 fi
 
 echo "### SpiderMonkey"
-sh "$HERE/tools/build-mozjs-ios.sh" "$SDK" "$SRC/libraries/source/spidermonkey"
+# With the dependency prefix in reach so SpiderMonkey uses our zlib instead of
+# linking its own copy into js_static.a.
+PKG_CONFIG_LIBDIR="$SRC/libraries/macos/pkgconfig" \
+    sh "$HERE/tools/build-mozjs-ios.sh" "$SDK" "$SRC/libraries/source/spidermonkey"
 
 echo "### Was da ist"
 PC="$SRC/libraries/macos/pkgconfig"
