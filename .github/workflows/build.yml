@@ -49,8 +49,8 @@ jobs:
             ext/0ad-0.28.0/libraries/macos
             ext/0ad-0.28.0/libraries/source/spidermonkey/lib
             ext/0ad-0.28.0/libraries/source/spidermonkey/include-release
-          key: deps-iphonesimulator-0.28.0-v1
-          restore-keys: deps-iphonesimulator-0.28.0-v1-
+          key: deps-iphonesimulator-0.28.0-v2
+          restore-keys: deps-iphonesimulator-0.28.0-v2-
 
       - name: Fetch and patch the source
         run: tools/get-source.sh
@@ -69,7 +69,7 @@ jobs:
             ext/0ad-0.28.0/libraries/macos
             ext/0ad-0.28.0/libraries/source/spidermonkey/lib
             ext/0ad-0.28.0/libraries/source/spidermonkey/include-release
-          key: deps-iphonesimulator-0.28.0-v1-${{ github.run_id }}
+          key: deps-iphonesimulator-0.28.0-v2-${{ github.run_id }}
 
       - name: Build pyrogenesis
         run: |

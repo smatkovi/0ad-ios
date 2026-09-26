@@ -85,13 +85,19 @@ export CXXFLAGS="$CXXFLAGS -w"
 export MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE=none
 export MOZBUILD_STATE_PATH="$PWD/mozbuild-state"
 
+# Deliberately only three options on top of 0 A.D.'s own mozconfig (which
+# already has --enable-project=js, --disable-jemalloc, --without-intl-api,
+# --disable-js-shell and --disable-tests): the target, the iOS deployment
+# version, and no JIT.
+#
+# --disable-shared-js was in here once and cost a link failure: the static
+# library then references _moz_set_max_dirty_page_modifier, which nothing
+# defines with jemalloc switched off. 0 A.D.'s macOS build keeps shared-js on
+# and links js_static.a anyway, so this build does the same.
 OPTIONS="--target=$TRIPLE
     --enable-ios-target=$MIN
     --disable-jit
-    --enable-optimize
-    --disable-shared-js
-    --disable-js-shell
-    --disable-tests"
+    --enable-optimize"
 
 echo "--- configure/build: $TRIPLE"
 set -x
