@@ -1,0 +1,33 @@
+StringBuilder's fmt fallback includes the wrong header.
+
+    "fmt::v7::detail::iterator_buffer<char*, char, fixed_buffer_traits>::flush()",
+        referenced from: PS::StringBuilder::Append<unsigned int>(unsigned int)
+
+ps/strings/StringBuilder.h uses std::to_chars when libc++ advertises it and
+fmt::format_to_n otherwise - and for that fallback it includes <fmt/core.h>.
+core.h *declares* iterator_buffer::flush(); the definition is in format.h. So
+the fallback cannot link, and nobody notices, because libc++ defines
+__cpp_lib_to_chars nearly everywhere.
+
+Here it does not: with a deployment target of iOS 13 libc++ withholds
+__cpp_lib_to_chars (the floating point part of to_chars is only available from
+iOS 16.3), the fallback is taken, and the link fails on that one symbol. The fix
+is the header that has the definition. Raising the deployment target would also
+make it go away, by never taking the branch - which is how it stayed unnoticed.
+
+--- source/ps/strings/StringBuilder.h
++++ source/ps/strings/StringBuilder.h
+@@ -29,7 +29,12 @@
+ #if defined(__cpp_lib_to_chars)
+ #include <charconv>
+ #else
+-#include <fmt/core.h>
++// format.h, not core.h: fmt::format_to_n needs iterator_buffer::flush(), which
++// core.h only declares -- the definition is in format.h. This branch is rarely
++// taken, because libc++ defines __cpp_lib_to_chars almost everywhere, so the
++// missing definition never shows up as anything but an undefined symbol at the
++// very end of a link.
++#include <fmt/format.h>
+ #endif
+ 
+ namespace PS

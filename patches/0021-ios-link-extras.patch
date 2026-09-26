@@ -1,0 +1,49 @@
+Two things the link line needs on iOS.
+
+Everything compiles; these only show up at the very end, when pyrogenesis is
+linked.
+
+* **SDL2main.** On iOS the real main() lives in SDL2main - it starts the
+  UIApplication and then calls SDL_main, which is what SDL.h has renamed the
+  engine's main() to. sdl2.pc names only -lSDL2, so without this the link ends
+  with "Undefined symbols: _main, referenced from <initial-undefines>". The GLES
+  probe in this repo ran into the same thing.
+
+* **BrowserEngineCore.** SpiderMonkey's jit directory references
+  be_memory_inline_jit_restrict_rwx_to_rw_with_witness_impl and its rx twin even
+  when built with --disable-jit. They are Apple's interface for letting an app
+  toggle W^X, and they live in BrowserEngineCore, which exists since iOS 17.4.
+
+--- build/premake/extern_libs5.lua
++++ build/premake/extern_libs5.lua
+@@ -622,6 +622,14 @@
+ 					linkoptions { "/IGNORE:4099" }
+ 				filter{}
+ 			elseif not _OPTIONS["android"] then
++				if _OPTIONS["ios"] then
++					-- On iOS the real main() lives in SDL2main: it starts the
++					-- UIApplication and then calls SDL_main, which is what
++					-- SDL.h has renamed the engine's main() to. sdl2.pc names
++					-- only -lSDL2, so without this the link ends with an
++					-- undefined _main and nothing else to go on.
++					links { "SDL2main" }
++				end
+ 				pkgconfig.add_links("sdl2")
+ 			end
+ 		end,
+--- build/premake/premake5.lua
++++ build/premake/premake5.lua
+@@ -1255,7 +1255,12 @@
+ 			-- Foundation and UIKit instead. Nothing in the engine calls
+ 			-- ApplicationServices (see lib/sysdep/os/osx/osx.cpp, where the
+ 			-- include is unused), and Cocoa only came in for Atlas.
+-			links { "CoreFoundation.framework", "Foundation.framework", "UIKit.framework" }
++			-- BrowserEngineCore provides be_memory_inline_jit_restrict_rwx_*,
++			-- which SpiderMonkey's jit code references on iOS even when it is
++			-- built without a JIT. It is Apple's way of letting an app toggle
++			-- W^X, and exists since iOS 17.4.
++			links { "CoreFoundation.framework", "Foundation.framework",
++				"UIKit.framework", "BrowserEngineCore.framework" }
+ 		else
+ 			links { "ApplicationServices.framework", "Cocoa.framework", "CoreFoundation.framework" }
+ 		end
