@@ -1,0 +1,40 @@
+An iOS window is the screen.
+
+With the whole game shipped -- mod and public, 1.4 GB in the bundle -- the
+simulator still shows nothing but magenta, so it was never a missing texture.
+The engine renders 1200 frames in four minutes into a surface it reports as
+852x393, the screen is 1179x2556, and none of what is drawn is ever composited.
+
+Three things about that window are wrong on iOS, and the GLES probe in this
+repository -- which does show its triangle -- does all three differently:
+
+* **Resizable.** An iOS window cannot be resized; it is the screen. Asking for
+  one leaves SDL with a layer that does not match.
+* **Not fullscreen.** Same reason.
+* **No ALLOW_HIGHDPI**, so the drawable is the screen in points rather than
+  pixels: 852x393 instead of 2556x1179.
+
+On every other platform the flags are untouched.
+
+--- source/ps/VideoMode.cpp
++++ source/ps/VideoMode.cpp
+@@ -396,6 +396,19 @@
+ 		flags |= SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
+ 		if (m_ConfigEnableHiDPI)
+ 			flags |= SDL_WINDOW_ALLOW_HIGHDPI;
++#if OS_IOS
++		// An iOS window is the screen: it cannot be resized, and it is always
++		// fullscreen. Asking for a resizable window leaves SDL with a layer
++		// that does not match the screen, and then nothing of what the engine
++		// draws is ever composited -- the simulator shows its placeholder
++		// colour over a game that is rendering happily at five frames a second.
++		//
++		// ALLOW_HIGHDPI on top, because without it the drawable is the screen
++		// in points (852x393 here) rather than pixels, which is the one thing
++		// the working GLES probe in this repository did differently.
++		flags &= ~static_cast<Uint32>(SDL_WINDOW_RESIZABLE);
++		flags |= SDL_WINDOW_FULLSCREEN | SDL_WINDOW_ALLOW_HIGHDPI;
++#endif
+ 		if (isGLBackend)
+ 			flags |= SDL_WINDOW_OPENGL;
+ 		else if (m_Backend == Renderer::Backend::Backend::VULKAN)
