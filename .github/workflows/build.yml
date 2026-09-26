@@ -86,6 +86,20 @@ jobs:
         run: |
           ls -la "$SRC/binaries/system" || true
           tools/show-platform.sh "$SRC/binaries/system/pyrogenesis" || true
+          # Does anything in here replace the system allocator? SpiderMonkey's
+          # mozglue does on some platforms, and a process where the frameworks
+          # allocate with one malloc and free with another crashes exactly the
+          # way this one does: a null pointer deep inside libdispatch, at
+          # different call sites each time.
+          echo "--- eigene malloc-Definitionen im Programm:"
+          nm -g "$SRC/binaries/system/pyrogenesis" 2>/dev/null \
+              | grep -E " T _(malloc|free|realloc|calloc|valloc|posix_memalign)$" || echo "(keine)"
+          echo "--- und in SpiderMonkey:"
+          nm -g "$SRC/libraries/source/spidermonkey/lib/libmozjs128-release.a" 2>/dev/null \
+              | grep -E " T _(malloc|free|realloc|calloc)$" | sort -u | head || echo "(keine)"
+          echo "--- replace_malloc?"
+          nm -g "$SRC/libraries/source/spidermonkey/lib/libmozjs128-release.a" 2>/dev/null \
+              | grep -i "replace_malloc\|mozmem" | head -5 || true
 
       # The base mod is 89 MB inside a 1.4 GB data release, so it is fetched
       # once and cached, not kept in the repository.
