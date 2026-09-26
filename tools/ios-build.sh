@@ -23,8 +23,12 @@
 # That is where 0 A.D.'s own build-macos-libs.sh puts them.
 set -e
 
+# Resolved before anything changes directory: $0 is relative, and this script
+# cds into the workspace later.
+TOOLS=$(cd "$(dirname "$0")" && pwd)
+
 SDK=${1:-iphonesimulator}
-SRC=${2:-$(cd "$(dirname "$0")/.." && pwd)/ext/0ad-0.28.0}
+SRC=${2:-$TOOLS/../ext/0ad-0.28.0}
 MIN=${MIN:-13.0}
 JOBS=${JOBS:-3}
 
@@ -125,5 +129,4 @@ test -x "$SRC/binaries/system/pyrogenesis" || {
     echo "FEHLER: kein pyrogenesis, obwohl make zufrieden war"
     exit 1
 }
-sh "$(cd "$(dirname "$0")" && pwd)/show-platform.sh" \
-    "$SRC/binaries/system/pyrogenesis"
+sh "$TOOLS/show-platform.sh" "$SRC/binaries/system/pyrogenesis"
