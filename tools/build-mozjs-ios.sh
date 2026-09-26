@@ -113,10 +113,14 @@ RUST_LIB=$(find build-release -name libjsrust.a | head -1)
     find build-release -name "*.a" | head -20
     exit 1
 }
-mkdir -p "$PREFIX/lib" "$PREFIX/include"
+# The names and the layout are 0 A.D.'s own bundled-SpiderMonkey layout, so
+# pointing PREFIX at libraries/source/spidermonkey makes premake's non-system
+# path find everything with no --with-system-mozjs and no .pc file at all.
+mkdir -p "$PREFIX/lib" "$PREFIX/include-release"
 cp -L "$LIB" "$PREFIX/lib/libmozjs128-release.a"
 cp -L "$RUST_LIB" "$PREFIX/lib/libmozjs128-rust.a"
-cp -R -L build-release/dist/include/* "$PREFIX/include/"
+cp -R -L build-release/dist/include/* "$PREFIX/include-release/"
+echo "$PV+ios" > "$PREFIX/.already-built"
 
 echo "--- Ergebnis:"
 ls -la "$PREFIX/lib"

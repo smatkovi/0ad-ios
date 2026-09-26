@@ -1,0 +1,267 @@
+Teach 0 A.D.'s own macOS dependency script an iOS mode.
+
+There is no Termux for iOS, so unlike the Android port every dependency has to
+be built against the SDK. Writing a new script for that would mean repeating
+what libraries/build-macos-libs.sh already does for macOS - download, patch,
+configure, install, and collect every .pc file where premake's macosx branch
+looks for it (libraries/macos/pkgconfig). So it gets an iOS mode instead.
+
+Set IOS_SDK to iphonesimulator or iphoneos; everything else follows. The script
+already had most of the hooks: SYSROOT, ARCH, HOST_PLATFORM for cross builds,
+ICU_CROSS_BUILD, LIBSODIUM_SKIP_TESTS, CMAKE_FLAGS. What had to be added:
+
+* **-target instead of -mmacosx-version-min.** Device and simulator are both
+  arm64; the only thing that separates them is the target triple, and
+  -mmacosx-version-min would fight it.
+
+* **Everything is a cross build**, even though the runner is arm64 too: a
+  simulator binary needs the simulator to run and a device binary needs the
+  device, so nothing built here can be executed. That is why ICU_CROSS_BUILD and
+  LIBSODIUM_SKIP_TESTS are set regardless of the host architecture, --host is
+  passed, and CHOST is exported for zlib, whose hand-written configure otherwise
+  guesses from uname. (autoconf ignores CHOST, so it costs nothing elsewhere.)
+
+* **SDL2 through CMake.** Its autotools build has no UIKit backend at all -
+  `--enable-video-cocoa` is the desktop one. The CMake build does support iOS.
+  Static, like everything else here: an app that is not a framework bundle has
+  nowhere sensible to put a dylib.
+
+* **Boost headers only.** 0 A.D. never links Boost on this platform - the macosx
+  branch of extern_libs5.lua adds an include path and nothing else, and the
+  generated link line carries no -lboost_* - so cross-building filesystem and
+  system with b2 would be a long build for nothing.
+
+* **Ten libraries are skipped**, and not because they fail: each is switched off
+  in the engine anyway. wxWidgets is Atlas, gmp/nettle/gnutls/gloox are the
+  multiplayer lobby, ogg/vorbis/openal are the sound, MoltenVK would be a
+  Vulkan backend that needs a renderer port of its own. `ios_skip` says so per
+  library instead of silently doing nothing.
+
+The prefix stays libraries/macos, because premake hardcodes it (libraries_dir,
+plus the boost and iconv paths). An iOS build therefore overwrites a macOS one
+in the same tree, which is fine for CI and worth knowing about by hand.
+
+--- libraries/build-macos-libs.sh
++++ libraries/build-macos-libs.sh
+@@ -65,6 +65,30 @@
+ export MIN_OSX_VERSION="${MIN_OSX_VERSION:="10.15"}"
+ export ARCH="${ARCH:=""}"
+ 
++# iOS mode: set IOS_SDK to iphonesimulator or iphoneos, everything else follows
++# from it. iOS is Darwin, so this is the same script with a different SDK, a
++# different version flag and one honest consequence: nothing built here can be
++# executed, so every library is a cross build even when the host is also arm64.
++IOS=false
++if [ -n "$IOS_SDK" ]; then
++	IOS=true
++	MIN_IOS_VERSION="${MIN_IOS_VERSION:="13.0"}"
++	case "$IOS_SDK" in
++		iphonesimulator) IOS_TARGET="arm64-apple-ios$MIN_IOS_VERSION-simulator" ;;
++		iphoneos)        IOS_TARGET="arm64-apple-ios$MIN_IOS_VERSION" ;;
++		*) echo "ERROR: IOS_SDK must be iphonesimulator or iphoneos"; exit 1 ;;
++	esac
++	SYSROOT="${SYSROOT:="$(xcrun --sdk "$IOS_SDK" --show-sdk-path)"}"
++	ARCH=arm64
++	# -mmacosx-version-min would fight the -target below.
++	MIN_OSX_VERSION=""
++	export CC="$(xcrun --sdk "$IOS_SDK" -f clang)"
++	export CXX="$(xcrun --sdk "$IOS_SDK" -f clang++)"
++	# zlib's configure is hand written and guesses from uname unless CHOST says
++	# otherwise. autoconf ignores CHOST, so setting it here costs nothing.
++	export CHOST=aarch64-apple-darwin
++fi
++
+ # The various libs offer inconsistent configure options, some allow
+ # setting sysroot and OS X-specific options, others don't. Adding to
+ # the confusion, Apple moved /Developer/SDKs into the Xcode app bundle
+@@ -84,6 +108,12 @@
+ 	# and CRT version, and use it to set the macosx_version_min linker flag
+ 	LDFLAGS="$LDFLAGS -mmacosx-version-min=$MIN_OSX_VERSION"
+ fi
++# The -target triple is what separates the device from the simulator: both are
++# arm64, and -arch alone cannot tell them apart.
++if [ "$IOS" = "true" ]; then
++	C_FLAGS="$C_FLAGS -target $IOS_TARGET"
++	LDFLAGS="$LDFLAGS -target $IOS_TARGET"
++fi
+ 
+ CFLAGS="$CFLAGS $C_FLAGS -fvisibility=hidden"
+ CXXFLAGS="$CXXFLAGS $C_FLAGS -stdlib=libc++ -std=c++17"
+@@ -113,6 +143,16 @@
+ 	ICU_CROSS_BUILD=true
+ 	LIBSODIUM_SKIP_TESTS=true
+ fi
++if [ "$IOS" = "true" ]; then
++	# Not because the architecture differs -- it usually does not, the runner is
++	# arm64 too -- but because a simulator binary needs the simulator to run and
++	# a device binary needs the device. Anything a configure script wants to
++	# execute is out of reach, so ICU needs its native build first and
++	# libsodium's tests have to stay unbuilt.
++	ICU_CROSS_BUILD=true
++	LIBSODIUM_SKIP_TESTS=true
++	HOST_PLATFORM="--host=aarch64-apple-darwin"
++fi
+ 
+ CFLAGS="$CFLAGS -arch $ARCH"
+ CXXFLAGS="$CXXFLAGS -arch $ARCH"
+@@ -121,6 +161,10 @@
+ 
+ # CMake doesn't seem to pick up on architecture with CFLAGS only
+ CMAKE_FLAGS="-DCMAKE_OSX_ARCHITECTURES=$ARCH -DCMAKE_OSX_DEPLOYMENT_TARGET=$MIN_OSX_VERSION"
++if [ "$IOS" = "true" ]; then
++	CMAKE_FLAGS="-DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=$ARCH \
++		-DCMAKE_OSX_SYSROOT=$IOS_SDK -DCMAKE_OSX_DEPLOYMENT_TARGET=$MIN_IOS_VERSION"
++fi
+ 
+ JOBS=${JOBS:="-j2"}
+ 
+@@ -150,6 +194,17 @@
+ 	echo "Skipping - already built (use --force-rebuild to override)"
+ }
+ 
++# Libraries that an iOS build does not want. Not "does not work": each of them
++# is switched off in the engine anyway -- wxWidgets is Atlas, gmp/nettle/gnutls
++# /gloox are the multiplayer lobby, ogg/vorbis/openal are the sound, and
++# MoltenVK would be the Vulkan backend, which needs a renderer port of its own.
++ios_skip()
++{
++	[ "$IOS" = "true" ] || return 1
++	echo "Skipping $1 - not built for iOS"
++	return 0
++}
++
+ # Check that we're actually on macOS
+ if [ "$(uname -s)" != "Darwin" ]; then
+ 	die "This script is intended for macOS only"
+@@ -398,6 +453,19 @@
+ 
+ 		(
+ 			cd $LIB_DIRECTORY || die
++			if [ "$IOS" = "true" ]; then
++				# SDL2's autotools build has no UIKit backend at all --
++				# --enable-video-cocoa below is the desktop one. Its CMake build
++				# does support iOS, so that is the one to use here. Static, like
++				# everything else: an app that is not a framework bundle has
++				# nowhere sensible to put a dylib.
++				cmake -B build-ios $CMAKE_FLAGS \
++					-DCMAKE_BUILD_TYPE=Release \
++					-DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
++					-DCMAKE_C_FLAGS="$CFLAGS" \
++					-DSDL_SHARED=OFF -DSDL_STATIC=ON -DSDL_TEST=OFF || die
++				cmake --build build-ios "${JOBS}" --target install || die
++			else
+ 			# We don't want SDL2 to pull in system iconv, force it to detect ours with flags.
+ 			# Don't use X11 - we don't need it and Mountain Lion removed it
+ 			./configure \
+@@ -413,6 +481,7 @@
+ 				--enable-shared=no || die
+ 			make "${JOBS}" || die
+ 			make install || die
++			fi
+ 		) || die "SDL2 build failed"
+ 
+ 		cp -f lib/pkgconfig/* "$PC_PATH"
+@@ -445,6 +514,15 @@
+ 
+ 		(
+ 			cd $LIB_DIRECTORY || die
++			if [ "$IOS" = "true" ]; then
++				# 0 A.D. only ever *includes* Boost: the macosx branch of
++				# extern_libs5.lua adds an include path and links nothing, and
++				# the generated link line carries no -lboost_*. So there is
++				# nothing to cross-build here; copying the headers is the whole
++				# job, and it saves b2 and a very long build.
++				mkdir -p "$INSTALL_DIR/include" || die
++				cp -R boost "$INSTALL_DIR/include/" || die
++			else
+ 			# Can't use macosx-version, see above comment.
+ 			./bootstrap.sh \
+ 				--with-libraries=filesystem,system \
+@@ -461,6 +539,7 @@
+ 				threading=multi \
+ 				variant=release \
+ 				install || die
++			fi
+ 		) || die "Boost build failed"
+ 
+ 		echo "$LIB_VERSION" >.already-built
+@@ -474,6 +553,7 @@
+ echo "Building wxWidgets..."
+ 
+ (
++	if ios_skip wxWidgets; then exit 0; fi
+ 	LIB_VERSION="${WXWIDGETS_VERSION}"
+ 	LIB_ARCHIVE="$LIB_VERSION.tar.bz2"
+ 	LIB_DIRECTORY="$LIB_VERSION"
+@@ -626,6 +706,7 @@
+ 
+ OGG_DIR="$(pwd)/libogg"
+ (
++	if ios_skip libogg; then exit 0; fi
+ 	LIB_VERSION="${OGG_VERSION}"
+ 	LIB_ARCHIVE="$LIB_VERSION.tar.gz"
+ 	LIB_DIRECTORY="$LIB_VERSION"
+@@ -664,6 +745,7 @@
+ echo "Building libvorbis..."
+ 
+ (
++	if ios_skip libvorbis; then exit 0; fi
+ 	LIB_VERSION="${VORBIS_VERSION}"
+ 	LIB_ARCHIVE="$LIB_VERSION.tar.gz"
+ 	LIB_DIRECTORY="$LIB_VERSION"
+@@ -706,6 +788,7 @@
+ 
+ GMP_DIR="$(pwd)/gmp"
+ (
++	if ios_skip GMP; then exit 0; fi
+ 	LIB_VERSION="${GMP_VERSION}"
+ 	LIB_ARCHIVE="$LIB_VERSION.tar.bz2"
+ 	LIB_DIRECTORY="$LIB_VERSION"
+@@ -753,6 +836,7 @@
+ 
+ NETTLE_DIR="$(pwd)/nettle"
+ (
++	if ios_skip Nettle; then exit 0; fi
+ 	LIB_VERSION="${NETTLE_VERSION}"
+ 	LIB_ARCHIVE="$LIB_VERSION.tar.gz"
+ 	LIB_DIRECTORY="$LIB_VERSION"
+@@ -803,6 +887,7 @@
+ 
+ GNUTLS_DIR="$(pwd)/gnutls"
+ (
++	if ios_skip GnuTLS; then exit 0; fi
+ 	LIB_VERSION="${GNUTLS_VERSION}"
+ 	LIB_ARCHIVE="$LIB_VERSION.tar.xz"
+ 	LIB_DIRECTORY="$LIB_VERSION"
+@@ -868,6 +953,7 @@
+ echo "Building gloox..."
+ 
+ (
++	if ios_skip gloox; then exit 0; fi
+ 	LIB_VERSION="${GLOOX_VERSION}"
+ 	LIB_ARCHIVE="$LIB_VERSION.tar.bz2"
+ 	LIB_DIRECTORY="$LIB_VERSION"
+@@ -1029,6 +1115,7 @@
+ echo "Building MiniUPnPc..."
+ 
+ (
++	if ios_skip MiniUPnPc; then exit 0; fi
+ 	LIB_VERSION="${MINIUPNPC_VERSION}"
+ 	LIB_ARCHIVE="$LIB_VERSION.tar.gz"
+ 	LIB_DIRECTORY="$LIB_VERSION"
+@@ -1107,6 +1194,7 @@
+ 
+ echo "Building OpenAL Soft"
+ (
++	if ios_skip OpenAL; then exit 0; fi
+ 	LIB_DIRECTORY="openal-soft-$OPENAL_SOFT_VERSION"
+ 	LIB_ARCHIVE="$OPENAL_SOFT_VERSION.tar.gz"
+ 	LIB_URL="https://github.com/kcat/openal-soft/archive/refs/tags/"
+@@ -1186,6 +1274,7 @@
+ echo "Building Molten VK..."
+ 
+ (
++	if ios_skip MoltenVK; then exit 0; fi
+ 	LIB_DIRECTORY="MoltenVK-$MOLTENVK_VERSION"
+ 	LIB_ARCHIVE="v$MOLTENVK_VERSION.tar.gz"
+ 	LIB_URL="https://github.com/KhronosGroup/MoltenVK/archive/refs/tags/"

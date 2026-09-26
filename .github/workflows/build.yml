@@ -1,0 +1,98 @@
+name: "Build: simulator"
+
+# Dependencies, then the engine. Separate from the probes: this is the long one,
+# and everything it builds is cached, so a failure a third of the way through
+# does not start over.
+#
+# Both halves run in the same job because premake needs the dependencies in the
+# same tree (libraries/macos), and passing a 600 MB SpiderMonkey between jobs
+# through an artifact would cost more than building the engine.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'patches/**'
+      - 'tools/get-source.sh'
+      - 'tools/build-deps-ios.sh'
+      - 'tools/ios-build.sh'
+      - '.github/workflows/build.yml'
+
+jobs:
+  simulator:
+    name: pyrogenesis for the simulator
+    runs-on: macos-14
+    timeout-minutes: 300
+    env:
+      SDK: iphonesimulator
+      SRC: ${{ github.workspace }}/ext/0ad-0.28.0
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: brew install ninja autoconf automake libtool
+
+      - name: Cache the 0 A.D. source tarball
+        uses: actions/cache@v4
+        with:
+          path: ext/0ad-0.28.0-unix-build.tar.xz
+          key: zeroad-src-0.28.0
+
+      # Restore and save separately, so a run that dies halfway keeps what it
+      # built: the libraries are the expensive part (ICU wants a native build
+      # first, SpiderMonkey is four minutes of its own).
+      - name: Restore dependencies
+        id: cache-deps
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ext/0ad-0.28.0/libraries/macos
+            ext/0ad-0.28.0/libraries/source/spidermonkey/lib
+            ext/0ad-0.28.0/libraries/source/spidermonkey/include-release
+          key: deps-iphonesimulator-0.28.0-v1
+          restore-keys: deps-iphonesimulator-0.28.0-v1-
+
+      - name: Fetch and patch the source
+        run: tools/get-source.sh
+
+      - name: Build the dependencies
+        id: deps
+        run: |
+          set -o pipefail
+          tools/build-deps-ios.sh "$SDK" "$SRC" 2>&1 | tail -n 400
+
+      - name: Save dependencies
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ext/0ad-0.28.0/libraries/macos
+            ext/0ad-0.28.0/libraries/source/spidermonkey/lib
+            ext/0ad-0.28.0/libraries/source/spidermonkey/include-release
+          key: deps-iphonesimulator-0.28.0-v1-${{ github.run_id }}
+
+      - name: Build pyrogenesis
+        run: |
+          set -o pipefail
+          tools/ios-build.sh "$SDK" "$SRC" 2>&1 | tail -n 200
+
+      - name: What came out
+        if: always()
+        run: |
+          ls -la "$SRC/binaries/system" || true
+          tools/show-platform.sh "$SRC/binaries/system/pyrogenesis" || true
+
+      - name: Collect the logs
+        if: always()
+        run: |
+          mkdir -p out
+          find "$SRC/libraries/macos" -maxdepth 2 -name "*.log" -exec cp {} out/ \; 2>/dev/null || true
+          cp "${TMPDIR:-/tmp}/0ad-ios-build/build.log" out/ 2>/dev/null || true
+          ls "$SRC/libraries/macos/pkgconfig" > out/pkgconfig.txt 2>&1 || true
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: simulator-build
+          path: out

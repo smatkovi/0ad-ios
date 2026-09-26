@@ -29,7 +29,11 @@ cd "$DEST"
     curl -fL -o "0ad-$VER-unix-build.tar.xz" \
         "https://releases.wildfiregames.com/0ad-$VER-unix-build.tar.xz"
 
-if [ ! -d "$SRC" ]; then
+# Keyed on the stamp rather than the directory: a cache restore may already have
+# put built dependencies into $SRC/libraries/macos, and the tarball does not
+# contain that directory, so unpacking on top of it is safe and skipping would
+# leave the tree unpatched.
+if [ ! -e "$SRC/.patched" ]; then
     tar xf "0ad-$VER-unix-build.tar.xz"
     for p in "$HERE"/patches/0*.patch; do
         if out=$(cd "$SRC" && patch -p0 -N -r - --dry-run < "$p" 2>&1); then
@@ -41,6 +45,7 @@ if [ ! -d "$SRC" ]; then
             exit 1
         fi
     done
+    touch "$SRC/.patched"
 fi
 
 echo "$SRC"
