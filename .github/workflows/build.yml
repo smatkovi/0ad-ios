@@ -135,10 +135,7 @@ jobs:
           # its own logs, and the system log has its stdout.
           START=$(date +%s)
           # No -mod: the default is mod + public, which is the whole game.
-          # The paint test replaces the frame with a plain blue screen: it asks
-          # whether presenting works at all, independently of the renderer.
-          SIMCTL_CHILD_PYROGENESIS_IOS_PAINT_TEST=1 \
-              xcrun simctl launch "$DEV" org.smatkovi.zeroad
+          xcrun simctl launch "$DEV" org.smatkovi.zeroad
           CONTAINER=$(xcrun simctl get_app_container "$DEV" org.smatkovi.zeroad data)
           # The simulator renders GLES in software and SpiderMonkey has no JIT,
           # so this takes its time. Look three times instead of once, and ask

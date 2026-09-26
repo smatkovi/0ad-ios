@@ -1,0 +1,88 @@
+On iOS the backbuffer is not framebuffer zero.
+
+    // Backbuffer for GL is a special case with a zero framebuffer.
+
+says CFramebuffer::CreateBackbuffer, and everywhere else that is true. On iOS it
+is not: a CAEAGLLayer is fed by a renderbuffer attached to a framebuffer object,
+SDL creates that object together with the context, and its name is never zero.
+Binding zero is legal and draws nowhere -- silently, at full speed.
+
+That is what the engine did. It started, loaded the whole game, ran its frame
+loop for minutes at a few frames a second, and every frame went into nothing;
+the screen kept showing the simulator's placeholder. A bare clear-and-swap
+against framebuffer zero came back black with GL_INVALID_ENUM, which is what
+finally said it out loud -- while the GLES probe in this repository, which never
+rebinds anything and leaves SDL's framebuffer in place, had been showing its
+triangle all along.
+
+So the device remembers what is bound right after the context is created, and
+the backbuffer uses that instead of zero.
+
+--- source/renderer/backend/gl/Device.h
++++ source/renderer/backend/gl/Device.h
+@@ -137,11 +137,27 @@
+ 
+ 	const Capabilities& GetCapabilities() const override { return m_Capabilities; }
+ 
++public:
++#if OS_IOS
++	/**
++	 * The framebuffer the window draws through.
++	 *
++	 * Zero everywhere else, and on iOS anything but: a CAEAGLLayer is fed by a
++	 * renderbuffer attached to a framebuffer object, and SDL creates that
++	 * object when the context is made. Binding zero there draws nowhere at all
++	 * -- silently, at full speed, frame after frame.
++	 */
++	GLuint GetDefaultFramebuffer() const { return m_DefaultFramebuffer; }
++#endif
++
+ private:
+ 	CDevice();
+ 
+ 	SDL_Window* m_Window = nullptr;
+ 	SDL_GLContext m_Context = nullptr;
++#if OS_IOS
++	GLuint m_DefaultFramebuffer = 0;
++#endif
+ 	int m_SurfaceDrawableWidth = 0, m_SurfaceDrawableHeight = 0;
+ 
+ 	bool m_ARB = false;
+--- source/renderer/backend/gl/Device.cpp
++++ source/renderer/backend/gl/Device.cpp
+@@ -243,6 +243,19 @@
+ 		}
+ 		SDL_GL_GetDrawableSize(window, &device->m_SurfaceDrawableWidth, &device->m_SurfaceDrawableHeight);
+ 
++#if OS_IOS
++		// Whatever is bound now is the window's framebuffer: SDL has just made
++		// the context, and on iOS that means a framebuffer object with a
++		// renderbuffer feeding the CAEAGLLayer. It is never zero, and binding
++		// zero draws nowhere -- see CFramebuffer::CreateBackbuffer, where the
++		// backbuffer is a zero framebuffer on every other platform.
++		{
++			GLint binding{0};
++			glGetIntegerv(GL_FRAMEBUFFER_BINDING, &binding);
++			device->m_DefaultFramebuffer = static_cast<GLuint>(binding);
++		}
++#endif
++
+ #if OS_WIN
+ 		ogl_Init(SDL_GL_GetProcAddress, wutil_GetAppHDC());
+ #elif (defined(SDL_VIDEO_DRIVER_X11) || defined(SDL_VIDEO_DRIVER_WAYLAND)) && !CONFIG2_GLES
+--- source/renderer/backend/gl/Framebuffer.cpp
++++ source/renderer/backend/gl/Framebuffer.cpp
+@@ -172,6 +172,13 @@
+ 	// Backbuffer for GL is a special case with a zero framebuffer.
+ 	std::unique_ptr<CFramebuffer> framebuffer(new CFramebuffer());
+ 	framebuffer->m_Device = device;
++#if OS_IOS
++	// Except on iOS, where the window draws through a framebuffer object of
++	// SDL's making. Zero is a valid name there and draws nowhere at all, which
++	// is what the engine did: a perfectly healthy frame loop at five frames a
++	// second, rendering into nothing.
++	framebuffer->m_Handle = device->GetDefaultFramebuffer();
++#endif
+ 	framebuffer->m_AttachmentMask = GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
+ 	framebuffer->m_ClearColor = CColor(0.0f, 0.0f, 0.0f, 0.0f);
+ 	framebuffer->m_ColorAttachmentLoadOp = colorAttachmentLoadOp;

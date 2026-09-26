@@ -52,7 +52,7 @@ loop to nest in.
 
 --- source/main.cpp
 +++ source/main.cpp
-@@ -555,6 +555,171 @@
+@@ -555,6 +555,173 @@
  
  // moved into a helper function to ensure args is destroyed before
  // exit(), which may result in a memory leak.
@@ -192,7 +192,9 @@ loop to nest in.
 +		// thread, where it was made current -- but a plain clear and swap does
 +		// not reach the screen, so that assumption is the next one to check.
 +		SDL_GLContext const current{SDL_GL_GetCurrentContext()};
-+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
++		// Not zero: on iOS the window draws through SDL's framebuffer object.
++		GLint binding{0};
++		glGetIntegerv(GL_FRAMEBUFFER_BINDING, &binding);
 +		glViewport(0, 0, 2556, 1179);
 +		glClearColor(0.0f, 0.45f, 0.9f, 1.0f);
 +		glClear(GL_COLOR_BUFFER_BIT);
@@ -224,7 +226,7 @@ loop to nest in.
  static void RunGameOrAtlas(const std::span<const char* const> argv)
  {
  	const CmdLineArgs args(argv);
-@@ -627,11 +792,22 @@
+@@ -627,11 +794,22 @@
  
  	// We need to initialize SpiderMonkey and libxml2 in the main thread before
  	// any thread uses them. So initialize them here before we might run Atlas.
@@ -248,7 +250,7 @@ loop to nest in.
  
  	if (ATLAS_RunIfOnCmdLine(args, false))
  		return;
-@@ -698,7 +874,13 @@
+@@ -698,7 +876,13 @@
  
  		// This must come after VFS init, which sets the current directory (required for finding our
  		// output log files).
@@ -262,7 +264,7 @@ loop to nest in.
  
  		if (!Init(args, std::exchange(firstIteration, false) ? INIT_MODS : 0))
  		{
-@@ -731,7 +913,12 @@
+@@ -731,7 +915,12 @@
  		std::optional<DAP::Interface> dapInterface{CreateDAPInterface(args)};
  #endif // CONFIG2_DAP_INTERFACE
  
@@ -275,7 +277,7 @@ loop to nest in.
  
  		if (isVisual)
  		{
-@@ -744,6 +931,27 @@
+@@ -744,6 +933,27 @@
  
  		try
  		{
@@ -303,7 +305,7 @@ loop to nest in.
  			// MSVC doesn't support copy elision in ternary expressions. So we use a lambda instead.
  			std::optional<RL::Interface> rlInterface{[&]() -> std::optional<RL::Interface>
  				{
-@@ -837,6 +1045,15 @@
+@@ -837,6 +1047,15 @@
  	{
  		g_ExitStatus = EXIT_FAILURE;
  	}
