@@ -145,6 +145,12 @@ jobs:
           for seconds in 60 120 240; do
               while [ "$(date +%s)" -lt $((START + seconds)) ]; do sleep 5; done
               xcrun simctl io "$DEV" screenshot "simulator-${seconds}s.png" || true
+              # The simulator rotates the app to landscape and captures in the
+              # device's native portrait, so every screenshot arrives on its
+              # side. 270 degrees clockwise puts it upright; measured against
+              # the first frame the port ever drew.
+              sips -r 270 "simulator-${seconds}s.png" \
+                  --out "simulator-${seconds}s.png" > /dev/null 2>&1 || true
               echo "--- nach ${seconds}s:"
               # Three questions, because the first two have each lied once
               # already: `simctl spawn ps` finds no ps inside the runtime, and
@@ -190,6 +196,11 @@ jobs:
           fi
           echo "--- wurde ein Rahmen gezeichnet?"
           cat out/ios-frames.txt 2>/dev/null || echo "(die Datei gibt es nicht -- der Rueckruf lief nie)"
+          # Reported, not yet a gate: frames 0-2 are noted before anything need
+          # have been drawn, and whether this readback sees the engine's frame
+          # or an undefined back buffer is not settled. A non-zero middle pixel
+          # is evidence; a zero one is not yet a failure.
+          grep "middle pixel" out/ios-frames.txt 2>/dev/null | tail -3 || true
           echo "--- Systemprotokoll"
           tail -40 out/system-log.txt 2>/dev/null || true
           # system_info.txt is written once the window and the GL context stand,

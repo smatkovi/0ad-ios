@@ -52,7 +52,7 @@ loop to nest in.
 
 --- source/main.cpp
 +++ source/main.cpp
-@@ -555,6 +555,173 @@
+@@ -555,6 +555,178 @@
  
  // moved into a helper function to ensure args is destroyed before
  // exit(), which may result in a memory leak.
@@ -172,9 +172,12 @@ loop to nest in.
 +		unsigned char pixel[4]{};
 +		glReadPixels(drawableWidth / 2, drawableHeight / 2, 1, 1,
 +			GL_RGBA, GL_UNSIGNED_BYTE, pixel);
-+		IosNote("frame %d: window %dx%d, drawable %dx%d, middle pixel %u,%u,%u",
++		// g_xres/g_yres as well: the viewport comes from those, the backbuffer
++		// from the drawable, and when the two disagree the game draws into a
++		// corner of its own frame. Nothing else prints them.
++		IosNote("frame %d: window %dx%d, drawable %dx%d, viewport %dx%d, middle pixel %u,%u,%u",
 +			frames, windowWidth, windowHeight, drawableWidth, drawableHeight,
-+			pixel[0], pixel[1], pixel[2]);
++			g_xres, g_yres, pixel[0], pixel[1], pixel[2]);
 +	}
 +	++frames;
 +
@@ -195,11 +198,13 @@ loop to nest in.
 +		// Not zero: on iOS the window draws through SDL's framebuffer object.
 +		GLint binding{0};
 +		glGetIntegerv(GL_FRAMEBUFFER_BINDING, &binding);
-+		glViewport(0, 0, 2556, 1179);
++		int paintWidth{0}, paintHeight{0};
++		SDL_GL_GetDrawableSize(window, &paintWidth, &paintHeight);
++		glViewport(0, 0, paintWidth, paintHeight);
 +		glClearColor(0.0f, 0.45f, 0.9f, 1.0f);
 +		glClear(GL_COLOR_BUFFER_BIT);
 +		unsigned char painted[4]{};
-+		glReadPixels(1278, 589, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, painted);
++		glReadPixels(paintWidth / 2, paintHeight / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, painted);
 +		const GLenum error{glGetError()};
 +		SDL_GL_SwapWindow(window);
 +		if (frames < 3 || frames % 300 == 0)
@@ -226,7 +231,7 @@ loop to nest in.
  static void RunGameOrAtlas(const std::span<const char* const> argv)
  {
  	const CmdLineArgs args(argv);
-@@ -627,11 +794,22 @@
+@@ -627,11 +799,22 @@
  
  	// We need to initialize SpiderMonkey and libxml2 in the main thread before
  	// any thread uses them. So initialize them here before we might run Atlas.
@@ -250,7 +255,7 @@ loop to nest in.
  
  	if (ATLAS_RunIfOnCmdLine(args, false))
  		return;
-@@ -698,7 +876,13 @@
+@@ -698,7 +881,13 @@
  
  		// This must come after VFS init, which sets the current directory (required for finding our
  		// output log files).
@@ -264,7 +269,7 @@ loop to nest in.
  
  		if (!Init(args, std::exchange(firstIteration, false) ? INIT_MODS : 0))
  		{
-@@ -731,7 +915,12 @@
+@@ -731,7 +920,12 @@
  		std::optional<DAP::Interface> dapInterface{CreateDAPInterface(args)};
  #endif // CONFIG2_DAP_INTERFACE
  
@@ -277,7 +282,7 @@ loop to nest in.
  
  		if (isVisual)
  		{
-@@ -744,6 +933,27 @@
+@@ -744,6 +938,27 @@
  
  		try
  		{
@@ -305,7 +310,7 @@ loop to nest in.
  			// MSVC doesn't support copy elision in ternary expressions. So we use a lambda instead.
  			std::optional<RL::Interface> rlInterface{[&]() -> std::optional<RL::Interface>
  				{
-@@ -837,6 +1047,15 @@
+@@ -837,6 +1052,15 @@
  	{
  		g_ExitStatus = EXIT_FAILURE;
  	}

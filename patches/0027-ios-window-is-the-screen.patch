@@ -1,39 +1,41 @@
-An iOS window is the screen.
+An iOS window is the screen -- in points.
 
-With the whole game shipped -- mod and public, 1.4 GB in the bundle -- the
-simulator still shows nothing but magenta, so it was never a missing texture.
-The engine renders 1200 frames in four minutes into a surface it reports as
-852x393, the screen is 1179x2556, and none of what is drawn is ever composited.
+Two things about the window are wrong on iOS. It asks to be resizable and not
+fullscreen, and a window there cannot be either: it is the screen.
 
-Three things about that window are wrong on iOS, and the GLES probe in this
-repository -- which does show its triangle -- does all three differently:
+The third would have been ALLOW_HIGHDPI, and it is a trap. The engine takes its
+backbuffer size from SDL_GL_GetDrawableSize (renderer/backend/gl/Device.cpp) and
+its viewport from g_xres/g_yres, which come from SDL_GetWindowSize -- pixels on
+one side, points on the other. Everywhere those two agree the mix is harmless.
+On a 3x screen with ALLOW_HIGHDPI they differ by three, and the game draws into
+one ninth of the frame at the origin.
 
-* **Resizable.** An iOS window cannot be resized; it is the screen. Asking for
-  one leaves SDL with a layer that does not match.
-* **Not fullscreen.** Same reason.
-* **No ALLOW_HIGHDPI**, so the drawable is the screen in points rather than
-  pixels: 852x393 instead of 2556x1179.
-
-On every other platform the flags are untouched.
+That is not a guess: the first screenshot after the port drew anything shows the
+whole interface inside a 393x853 block of a 1179x2556 capture, one ninth, flush
+against the corner -- and rotating that block 90 degrees counter-clockwise gives
+an upright main menu. Which incidentally settles a second question: the
+simulator *does* rotate the app to landscape, it simply captures in the device's
+native portrait.
 
 --- source/ps/VideoMode.cpp
 +++ source/ps/VideoMode.cpp
-@@ -396,6 +396,19 @@
+@@ -396,6 +396,20 @@
  		flags |= SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE;
  		if (m_ConfigEnableHiDPI)
  			flags |= SDL_WINDOW_ALLOW_HIGHDPI;
 +#if OS_IOS
 +		// An iOS window is the screen: it cannot be resized, and it is always
-+		// fullscreen. Asking for a resizable window leaves SDL with a layer
-+		// that does not match the screen, and then nothing of what the engine
-+		// draws is ever composited -- the simulator shows its placeholder
-+		// colour over a game that is rendering happily at five frames a second.
++		// fullscreen.
 +		//
-+		// ALLOW_HIGHDPI on top, because without it the drawable is the screen
-+		// in points (852x393 here) rather than pixels, which is the one thing
-+		// the working GLES probe in this repository did differently.
-+		flags &= ~static_cast<Uint32>(SDL_WINDOW_RESIZABLE);
-+		flags |= SDL_WINDOW_FULLSCREEN | SDL_WINDOW_ALLOW_HIGHDPI;
++		// And it must not ask for ALLOW_HIGHDPI, however tempting that looks.
++		// The engine takes its backbuffer size from SDL_GL_GetDrawableSize
++		// (Device.cpp) and its viewport from g_xres/g_yres, which come from
++		// SDL_GetWindowSize (below) -- pixels and points. They are equal
++		// everywhere those two agree; with ALLOW_HIGHDPI on a 3x screen they
++		// differ by three, and the game renders into one ninth of the frame at
++		// the origin. That is measurable: 852x393 of a 2556x1179 buffer.
++		flags &= ~static_cast<Uint32>(SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
++		flags |= SDL_WINDOW_FULLSCREEN;
 +#endif
  		if (isGLBackend)
  			flags |= SDL_WINDOW_OPENGL;

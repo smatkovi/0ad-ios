@@ -132,9 +132,14 @@ its first-launch dialog -- "Thank you for installing 0 A.D. Empires Ascendant!"
 -- over the main menu artwork: the GUI, the fonts, the textures and the GUI's
 JavaScript on a SpiderMonkey without a JIT, all of it working.
 
-It draws sideways in a corner, because the drawable is landscape (2556x1179)
-on a simulator screen that stays portrait: a headless simulator never rotates.
-A device does.
+It drew sideways in a corner at first, and the reason was not the one that
+looked obvious. The simulator *does* rotate the app to landscape -- it simply
+captures in the device's native portrait. What put the picture in the corner was
+a unit mismatch of the port's own making: the engine takes its backbuffer from
+`SDL_GL_GetDrawableSize` and its viewport from `SDL_GetWindowSize`, pixels
+against points, and `SDL_WINDOW_ALLOW_HIGHDPI` made those differ by three. One
+ninth of the frame, at the origin. Measured off the screenshot: the whole
+interface inside a 393x853 block of a 1179x2556 capture.
 
 The last three things in the way were each invisible from the outside, and each
 took measuring rather than guessing:
