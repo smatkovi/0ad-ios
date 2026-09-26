@@ -127,10 +127,14 @@ of Cocoa or ApplicationServices.
 
 ## It runs
 
-**0 A.D. starts, loads the whole game and draws on iOS.** The simulator shows
-its first-launch dialog -- "Thank you for installing 0 A.D. Empires Ascendant!"
--- over the main menu artwork: the GUI, the fonts, the textures and the GUI's
+**0 A.D. starts, loads the whole game and draws on iOS** -- full screen, upright
+and legible. The simulator shows the first-launch dialog, "Thank you for
+installing 0 A.D. Empires Ascendant!", over the main menu artwork, with its
+buttons where they belong: the GUI, the fonts, the textures and the GUI's
 JavaScript on a SpiderMonkey without a JIT, all of it working.
+
+    frame 1: window 852x393, drawable 852x393, viewport 852x393,
+             middle pixel 87,86,87
 
 It drew sideways in a corner at first, and the reason was not the one that
 looked obvious. The simulator *does* rotate the app to landscape -- it simply
