@@ -1,0 +1,160 @@
+Turn the frame loop around: let UIKit call the frame.
+
+0 A.D. starts, the GL context stands, the config is read, the frame loop is
+reached -- and about four seconds later:
+
+    EXC_BAD_ACCESS, KERN_INVALID_ADDRESS at 0x110
+      libdispatch  <- __CFRunLoopRun <- CFRunLoopRunSpecific
+      <- UIKit_PumpEvents <- SDL_PumpEventsInternal <- SDL_WaitEventTimeout
+      <- PumpEvents() / Frame() / RunGameOrAtlas()      main.cpp:762
+      <- SDL_main                                       main.cpp:842
+      <- -[SDLUIKitDelegate postFinishLaunch]
+      <- __NSFireDelayedPerform <- __CFRunLoopDoTimer <- __CFRunLoopRun
+
+Read from the bottom: SDL calls SDL_main from a run-loop *timer callback*,
+0 A.D. never gives control back, and SDL_PollEvent then enters that same run
+loop a second time from inside the callback. Nothing else here is unusual; the
+nesting is. Switching SDL's iOS pump off was tried first as a measurement: the
+crash disappeared and nothing rendered any more, which settled it.
+
+So SDL_main hands the frame to UIKit and returns. SDL's delegate is built for
+exactly this -- it deliberately does not exit when SDL_main returns ("to support
+applications that do setup in their main function and then allow the Cocoa event
+loop to run"), and it switches its own event pump off at that moment, so
+SDL_PollEvent inside the frame no longer enters the run loop at all. Touches
+still arrive: UIKit delivers them to SDL's view controller, which queues them.
+
+The price is that the frame outlives SDL_main, while on every other platform
+what it touches are locals of RunGameOrAtlas: the log file, the GUI script
+interface, the RL interface. Those move into one session object that is created
+once and never destroyed -- iOS ends the process, it does not unwind it. For the
+same reason the shutdown in main() is skipped while the game is still running.
+
+The restart path (do/while over ShutdownType::Restart, used after installing a
+mod) is not taken on iOS: the callback unregisters itself instead. Non-visual
+runs keep the old loop, having neither a window to hang a frame on nor a run
+loop to nest in.
+
+--- source/main.cpp
++++ source/main.cpp
+@@ -555,6 +555,54 @@
+ 
+ // moved into a helper function to ensure args is destroyed before
+ // exit(), which may result in a memory leak.
++#if OS_IOS
++namespace
++{
++/**
++ * What has to outlive SDL_main on iOS.
++ *
++ * UIKit owns the run loop. SDL calls SDL_main from a run-loop timer callback
++ * (-[SDLUIKitDelegate postFinishLaunch]), so a frame loop that never returns
++ * runs *inside* that callback -- and SDL_PollEvent then enters the same run
++ * loop a second time from in there. Four seconds of that and libdispatch
++ * dereferences a null pointer. Switching SDL's pump off made the crash go away
++ * and nothing render, which is what settled the diagnosis.
++ *
++ * So the loop is turned around: SDL_main registers the frame with UIKit and
++ * returns, and each frame then starts *from* the run loop. SDL's delegate is
++ * built for this -- it deliberately does not exit when SDL_main returns, and it
++ * switches its own event pump off at that point, so nothing nests any more.
++ *
++ * What the frame needs are locals of RunGameOrAtlas on every other platform.
++ * Here they live in one object that is created once and never destroyed: iOS
++ * ends the process, it does not unwind it.
++ */
++struct IosSession
++{
++	FileLogger logger;
++	std::optional<ScriptInterface> guiScriptInterface;
++	std::optional<RL::Interface> rlInterface;
++	int fixedFrameFrequency{0};
++};
++
++IosSession* g_IosSession{nullptr};
++
++void IosFrameCallback(void*)
++{
++	if (g_Shutdown != ShutdownType::None)
++	{
++		// The desktop would unwind here and possibly restart. On iOS the system
++		// ends the process; carrying on would leave UIKit calling into an
++		// engine that is shutting itself down.
++		SDL_iPhoneSetAnimationCallback(g_VideoMode.GetWindow(), 1, nullptr, nullptr);
++		return;
++	}
++	Frame(g_IosSession->rlInterface ? &*g_IosSession->rlInterface : nullptr,
++		g_IosSession->fixedFrameFrequency);
++}
++}
++#endif // OS_IOS
++
+ static void RunGameOrAtlas(const std::span<const char* const> argv)
+ {
+ 	const CmdLineArgs args(argv);
+@@ -698,7 +746,13 @@
+ 
+ 		// This must come after VFS init, which sets the current directory (required for finding our
+ 		// output log files).
++#if OS_IOS
++		// Same moment, same reason -- only it has to survive the return from
++		// SDL_main, so it is the session that holds it.
++		g_IosSession = new IosSession{};
++#else
+ 		FileLogger logger;
++#endif
+ 
+ 		if (!Init(args, std::exchange(firstIteration, false) ? INIT_MODS : 0))
+ 		{
+@@ -731,7 +785,12 @@
+ 		std::optional<DAP::Interface> dapInterface{CreateDAPInterface(args)};
+ #endif // CONFIG2_DAP_INTERFACE
+ 
++#if OS_IOS
++		// A reference, so every use below reads the same as everywhere else.
++		std::optional<ScriptInterface>& guiScriptInterface{g_IosSession->guiScriptInterface};
++#else
+ 		std::optional<ScriptInterface> guiScriptInterface;
++#endif
+ 
+ 		if (isVisual)
+ 		{
+@@ -753,6 +812,22 @@
+ 						return std::nullopt;
+ 				}()};
+ 
++#if OS_IOS
++			if (isVisual)
++			{
++				g_IosSession->rlInterface = std::move(rlInterface);
++				g_IosSession->fixedFrameFrequency = fixedFrameFrequency;
++				if (SDL_iPhoneSetAnimationCallback(g_VideoMode.GetWindow(), 1,
++						&IosFrameCallback, nullptr) != 0)
++					LOGERROR("Cannot hand the frame to UIKit: %s", SDL_GetError());
++				// Everything below this point belongs to the shutdown of a run
++				// that has ended. This one has not even started drawing yet.
++				return;
++			}
++			// A non-visual run has no window to hang a frame callback on, and
++			// no run-loop problem either: it never pumps events.
++#endif
++
+ 			while (g_Shutdown == ShutdownType::None)
+ 			{
+ 				if (isVisual)
+@@ -837,6 +912,15 @@
+ 	{
+ 		g_ExitStatus = EXIT_FAILURE;
+ 	}
++
++#if OS_IOS
++	// On iOS RunGameOrAtlas hands the frame to UIKit and returns while the game
++	// is still running, so none of the shutdown below may happen. SDL's
++	// delegate does not exit when SDL_main returns -- that is what makes this
++	// pattern work.
++	if (g_Shutdown == ShutdownType::None)
++		return g_ExitStatus;
++#endif
+ 
+ 	// Shut down profiler initialised by EarlyInit
+ 	g_Profiler2.Shutdown();
