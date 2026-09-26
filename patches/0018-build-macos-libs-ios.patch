@@ -14,6 +14,12 @@ ICU_CROSS_BUILD, LIBSODIUM_SKIP_TESTS, CMAKE_FLAGS. What had to be added:
   arm64; the only thing that separates them is the target triple, and
   -mmacosx-version-min would fight it.
 
+* **The sysroot in CPPFLAGS, not only in CFLAGS.** A good number of configure
+  tests run the preprocessor alone, and without a sysroot those cannot even find
+  <sys/types.h>. curl fails in exactly that way, and the message is a masterpiece
+  of misdirection: "socket can be linked: yes", "socket is prototyped: no", and
+  then, thirty seconds into make, "We can't compile without socket() support!"
+
 * **Everything is a cross build**, even though the runner is arm64 too: a
   simulator binary needs the simulator to run and a device binary needs the
   device, so nothing built here can be executed. That is why ICU_CROSS_BUILD and
@@ -43,7 +49,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
 
 --- libraries/build-macos-libs.sh
 +++ libraries/build-macos-libs.sh
-@@ -65,6 +65,30 @@
+@@ -65,6 +65,36 @@
  export MIN_OSX_VERSION="${MIN_OSX_VERSION:="10.15"}"
  export ARCH="${ARCH:=""}"
  
@@ -69,12 +75,18 @@ in the same tree, which is fine for CI and worth knowing about by hand.
 +	# zlib's configure is hand written and guesses from uname unless CHOST says
 +	# otherwise. autoconf ignores CHOST, so setting it here costs nothing.
 +	export CHOST=aarch64-apple-darwin
++	# And the sysroot has to be in CPPFLAGS as well, not only in CFLAGS: a good
++	# number of configure tests run the *preprocessor* alone, and without a
++	# sysroot those cannot even find <sys/types.h>. curl fails in exactly that
++	# way -- "socket can be linked: yes", "socket is prototyped: no", and then
++	# "We can't compile without socket() support!" thirty seconds into make.
++	export CPPFLAGS="$CPPFLAGS -isysroot $SYSROOT -target $IOS_TARGET"
 +fi
 +
  # The various libs offer inconsistent configure options, some allow
  # setting sysroot and OS X-specific options, others don't. Adding to
  # the confusion, Apple moved /Developer/SDKs into the Xcode app bundle
-@@ -84,6 +108,12 @@
+@@ -84,6 +114,12 @@
  	# and CRT version, and use it to set the macosx_version_min linker flag
  	LDFLAGS="$LDFLAGS -mmacosx-version-min=$MIN_OSX_VERSION"
  fi
@@ -87,7 +99,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  
  CFLAGS="$CFLAGS $C_FLAGS -fvisibility=hidden"
  CXXFLAGS="$CXXFLAGS $C_FLAGS -stdlib=libc++ -std=c++17"
-@@ -113,6 +143,16 @@
+@@ -113,6 +149,16 @@
  	ICU_CROSS_BUILD=true
  	LIBSODIUM_SKIP_TESTS=true
  fi
@@ -104,7 +116,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  
  CFLAGS="$CFLAGS -arch $ARCH"
  CXXFLAGS="$CXXFLAGS -arch $ARCH"
-@@ -121,6 +161,10 @@
+@@ -121,6 +167,10 @@
  
  # CMake doesn't seem to pick up on architecture with CFLAGS only
  CMAKE_FLAGS="-DCMAKE_OSX_ARCHITECTURES=$ARCH -DCMAKE_OSX_DEPLOYMENT_TARGET=$MIN_OSX_VERSION"
@@ -115,7 +127,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  
  JOBS=${JOBS:="-j2"}
  
-@@ -150,6 +194,17 @@
+@@ -150,6 +200,17 @@
  	echo "Skipping - already built (use --force-rebuild to override)"
  }
  
@@ -133,7 +145,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  # Check that we're actually on macOS
  if [ "$(uname -s)" != "Darwin" ]; then
  	die "This script is intended for macOS only"
-@@ -398,6 +453,19 @@
+@@ -398,6 +459,19 @@
  
  		(
  			cd $LIB_DIRECTORY || die
@@ -153,7 +165,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  			# We don't want SDL2 to pull in system iconv, force it to detect ours with flags.
  			# Don't use X11 - we don't need it and Mountain Lion removed it
  			./configure \
-@@ -413,6 +481,7 @@
+@@ -413,6 +487,7 @@
  				--enable-shared=no || die
  			make "${JOBS}" || die
  			make install || die
@@ -161,7 +173,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  		) || die "SDL2 build failed"
  
  		cp -f lib/pkgconfig/* "$PC_PATH"
-@@ -445,6 +514,15 @@
+@@ -445,6 +520,15 @@
  
  		(
  			cd $LIB_DIRECTORY || die
@@ -177,7 +189,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  			# Can't use macosx-version, see above comment.
  			./bootstrap.sh \
  				--with-libraries=filesystem,system \
-@@ -461,6 +539,7 @@
+@@ -461,6 +545,7 @@
  				threading=multi \
  				variant=release \
  				install || die
@@ -185,7 +197,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  		) || die "Boost build failed"
  
  		echo "$LIB_VERSION" >.already-built
-@@ -474,6 +553,7 @@
+@@ -474,6 +559,7 @@
  echo "Building wxWidgets..."
  
  (
@@ -193,7 +205,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  	LIB_VERSION="${WXWIDGETS_VERSION}"
  	LIB_ARCHIVE="$LIB_VERSION.tar.bz2"
  	LIB_DIRECTORY="$LIB_VERSION"
-@@ -626,6 +706,7 @@
+@@ -626,6 +712,7 @@
  
  OGG_DIR="$(pwd)/libogg"
  (
@@ -201,7 +213,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  	LIB_VERSION="${OGG_VERSION}"
  	LIB_ARCHIVE="$LIB_VERSION.tar.gz"
  	LIB_DIRECTORY="$LIB_VERSION"
-@@ -664,6 +745,7 @@
+@@ -664,6 +751,7 @@
  echo "Building libvorbis..."
  
  (
@@ -209,7 +221,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  	LIB_VERSION="${VORBIS_VERSION}"
  	LIB_ARCHIVE="$LIB_VERSION.tar.gz"
  	LIB_DIRECTORY="$LIB_VERSION"
-@@ -706,6 +788,7 @@
+@@ -706,6 +794,7 @@
  
  GMP_DIR="$(pwd)/gmp"
  (
@@ -217,7 +229,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  	LIB_VERSION="${GMP_VERSION}"
  	LIB_ARCHIVE="$LIB_VERSION.tar.bz2"
  	LIB_DIRECTORY="$LIB_VERSION"
-@@ -753,6 +836,7 @@
+@@ -753,6 +842,7 @@
  
  NETTLE_DIR="$(pwd)/nettle"
  (
@@ -225,7 +237,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  	LIB_VERSION="${NETTLE_VERSION}"
  	LIB_ARCHIVE="$LIB_VERSION.tar.gz"
  	LIB_DIRECTORY="$LIB_VERSION"
-@@ -803,6 +887,7 @@
+@@ -803,6 +893,7 @@
  
  GNUTLS_DIR="$(pwd)/gnutls"
  (
@@ -233,7 +245,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  	LIB_VERSION="${GNUTLS_VERSION}"
  	LIB_ARCHIVE="$LIB_VERSION.tar.xz"
  	LIB_DIRECTORY="$LIB_VERSION"
-@@ -868,6 +953,7 @@
+@@ -868,6 +959,7 @@
  echo "Building gloox..."
  
  (
@@ -241,7 +253,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  	LIB_VERSION="${GLOOX_VERSION}"
  	LIB_ARCHIVE="$LIB_VERSION.tar.bz2"
  	LIB_DIRECTORY="$LIB_VERSION"
-@@ -1029,6 +1115,7 @@
+@@ -1029,6 +1121,7 @@
  echo "Building MiniUPnPc..."
  
  (
@@ -249,7 +261,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  	LIB_VERSION="${MINIUPNPC_VERSION}"
  	LIB_ARCHIVE="$LIB_VERSION.tar.gz"
  	LIB_DIRECTORY="$LIB_VERSION"
-@@ -1107,6 +1194,7 @@
+@@ -1107,6 +1200,7 @@
  
  echo "Building OpenAL Soft"
  (
@@ -257,7 +269,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  	LIB_DIRECTORY="openal-soft-$OPENAL_SOFT_VERSION"
  	LIB_ARCHIVE="$OPENAL_SOFT_VERSION.tar.gz"
  	LIB_URL="https://github.com/kcat/openal-soft/archive/refs/tags/"
-@@ -1186,6 +1274,7 @@
+@@ -1186,6 +1280,7 @@
  echo "Building Molten VK..."
  
  (
