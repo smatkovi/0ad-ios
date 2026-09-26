@@ -32,6 +32,13 @@ ICU_CROSS_BUILD, LIBSODIUM_SKIP_TESTS, CMAKE_FLAGS. What had to be added:
   configure passes, and then generating pnglibconf runs the preprocessor over
   zlib's zconf.h and cannot find <sys/types.h>.
 
+* **ICU's native stage with the host compiler.** ICU cross-builds in two passes:
+  a native one whose tools *run* on the build machine to generate the data
+  tables, then the real one. The script passed it the same flags as everything
+  else, which for iOS means it produced simulator binaries and configure stopped
+  at "cannot run C compiled programs". The native pass now gets plain clang and
+  no flags at all.
+
 * **A newer SDL2, 2.32.8 instead of 2.24.0.** The pinned one is from 2022 and
   its CMakeLists declares compatibility with CMake 3.0, which CMake 4 refuses
   outright. 2.32.8 is also what the GLES probe in this repo proved builds for the
@@ -291,7 +298,31 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  	LIB_VERSION="${GLOOX_VERSION}"
  	LIB_ARCHIVE="$LIB_VERSION.tar.bz2"
  	LIB_DIRECTORY="$LIB_VERSION"
-@@ -1029,6 +1126,7 @@
+@@ -949,7 +1046,22 @@
+ 			else
+ 				cd $LIB_DIRECTORY/source/build
+ 			fi
+-			CFLAGS="$ARCHLESS_CFLAGS" CXXFLAGS="$ARCHLESS_CXXFLAGS" LDFLAGS="$ARCHLESS_LDFLAGS" \
++			# The native build exists so its tools can *run* on this machine and
++			# generate the data tables for the cross build. It must therefore see
++			# none of the iOS flags -- with them it produces simulator binaries
++			# and configure stops at "cannot run C compiled programs".
++			if [ "$IOS" = "true" ]; then
++				ICU_NATIVE_CC=clang
++				ICU_NATIVE_CXX=clang++
++			else
++				ICU_NATIVE_CC="$CC"
++				ICU_NATIVE_CXX="$CXX"
++			fi
++			CC="$ICU_NATIVE_CC" CXX="$ICU_NATIVE_CXX" \
++			CPPFLAGS="$([ "$IOS" = "true" ] || echo "$CPPFLAGS")" \
++			CFLAGS="$([ "$IOS" = "true" ] || echo "$ARCHLESS_CFLAGS")" \
++			CXXFLAGS="$([ "$IOS" = "true" ] || echo "$ARCHLESS_CXXFLAGS")" \
++			LDFLAGS="$([ "$IOS" = "true" ] || echo "$ARCHLESS_LDFLAGS")" \
+ 				../runConfigureICU MacOSX \
+ 				--prefix="$INSTALL_DIR" \
+ 				--disable-shared \
+@@ -1029,6 +1141,7 @@
  echo "Building MiniUPnPc..."
  
  (
@@ -299,7 +330,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  	LIB_VERSION="${MINIUPNPC_VERSION}"
  	LIB_ARCHIVE="$LIB_VERSION.tar.gz"
  	LIB_DIRECTORY="$LIB_VERSION"
-@@ -1107,6 +1205,7 @@
+@@ -1107,6 +1220,7 @@
  
  echo "Building OpenAL Soft"
  (
@@ -307,7 +338,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  	LIB_DIRECTORY="openal-soft-$OPENAL_SOFT_VERSION"
  	LIB_ARCHIVE="$OPENAL_SOFT_VERSION.tar.gz"
  	LIB_URL="https://github.com/kcat/openal-soft/archive/refs/tags/"
-@@ -1186,6 +1285,7 @@
+@@ -1186,6 +1300,7 @@
  echo "Building Molten VK..."
  
  (
