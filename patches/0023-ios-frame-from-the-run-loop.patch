@@ -52,7 +52,7 @@ loop to nest in.
 
 --- source/main.cpp
 +++ source/main.cpp
-@@ -555,6 +555,160 @@
+@@ -555,6 +555,172 @@
  
  // moved into a helper function to ensure args is destroyed before
  // exit(), which may result in a memory leak.
@@ -187,11 +187,23 @@ loop to nest in.
 +	// its triangle.
 +	if (getenv("PYROGENESIS_IOS_PAINT_TEST"))
 +	{
++		SDL_Window* const window{g_VideoMode.GetWindow()};
++		// Is the context even current here? The callback runs on the main
++		// thread, where it was made current -- but a plain clear and swap does
++		// not reach the screen, so that assumption is the next one to check.
++		SDL_GLContext const current{SDL_GL_GetCurrentContext()};
 +		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 +		glViewport(0, 0, 2556, 1179);
 +		glClearColor(0.0f, 0.45f, 0.9f, 1.0f);
 +		glClear(GL_COLOR_BUFFER_BIT);
-+		SDL_GL_SwapWindow(g_VideoMode.GetWindow());
++		unsigned char painted[4]{};
++		glReadPixels(1278, 589, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, painted);
++		const GLenum error{glGetError()};
++		const int swap{SDL_GL_SwapWindow(window), 0};
++		if (frames < 3 || frames % 300 == 0)
++			IosNote("paint: context %p, buffer after clear %u,%u,%u, glError 0x%04x, swap %d",
++				static_cast<void*>(current), painted[0], painted[1], painted[2],
++				error, swap);
 +		return;
 +	}
 +
@@ -213,7 +225,7 @@ loop to nest in.
  static void RunGameOrAtlas(const std::span<const char* const> argv)
  {
  	const CmdLineArgs args(argv);
-@@ -627,11 +781,22 @@
+@@ -627,11 +793,22 @@
  
  	// We need to initialize SpiderMonkey and libxml2 in the main thread before
  	// any thread uses them. So initialize them here before we might run Atlas.
@@ -237,7 +249,7 @@ loop to nest in.
  
  	if (ATLAS_RunIfOnCmdLine(args, false))
  		return;
-@@ -698,7 +863,13 @@
+@@ -698,7 +875,13 @@
  
  		// This must come after VFS init, which sets the current directory (required for finding our
  		// output log files).
@@ -251,7 +263,7 @@ loop to nest in.
  
  		if (!Init(args, std::exchange(firstIteration, false) ? INIT_MODS : 0))
  		{
-@@ -731,7 +902,12 @@
+@@ -731,7 +914,12 @@
  		std::optional<DAP::Interface> dapInterface{CreateDAPInterface(args)};
  #endif // CONFIG2_DAP_INTERFACE
  
@@ -264,7 +276,7 @@ loop to nest in.
  
  		if (isVisual)
  		{
-@@ -744,6 +920,27 @@
+@@ -744,6 +932,27 @@
  
  		try
  		{
@@ -292,7 +304,7 @@ loop to nest in.
  			// MSVC doesn't support copy elision in ternary expressions. So we use a lambda instead.
  			std::optional<RL::Interface> rlInterface{[&]() -> std::optional<RL::Interface>
  				{
-@@ -837,6 +1034,15 @@
+@@ -837,6 +1046,15 @@
  	{
  		g_ExitStatus = EXIT_FAILURE;
  	}
