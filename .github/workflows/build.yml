@@ -86,6 +86,11 @@ jobs:
         if: always()
         run: |
           mkdir -p out
+          # config.log is what says why a configure gave up, and it sits deep.
+          find "$SRC/libraries/macos" -name config.log 2>/dev/null | while read -r f; do
+              lib=$(printf '%s' "$f" | sed "s|.*/libraries/macos/||; s|/.*||")
+              cp "$f" "out/$lib-config.log" || true
+          done
           find "$SRC/libraries/macos" -maxdepth 2 -name "*.log" -exec cp {} out/ \; 2>/dev/null || true
           cp "${TMPDIR:-/tmp}/0ad-ios-build/build.log" out/ 2>/dev/null || true
           ls "$SRC/libraries/macos/pkgconfig" > out/pkgconfig.txt 2>&1 || true

@@ -25,8 +25,25 @@ HERE=$(cd "$(dirname "$0")/.." && pwd)
 SRC=${2:-$HERE/ext/0ad-0.28.0}
 JOBS=${JOBS:--j3}
 
+# When a configure scripts gives up, the reason is in its config.log and nowhere
+# else -- and the log sits several directories deep in a tree that CI throws
+# away. So say it here, on failure, while the tree still exists.
+show_config_log()
+{
+    log=$(find "$SRC/libraries/macos" -name config.log -newermt "-30 minutes" \
+          2>/dev/null | head -1)
+    [ -n "$log" ] || return 0
+    echo "### $log (die letzten Versuche)"
+    grep -nE "^configure:[0-9]+: (checking|error|failed)|^configure: error" "$log" | tail -25
+    echo "### und die letzten 40 Zeilen"
+    tail -40 "$log"
+}
+
 echo "### Abhängigkeiten für $SDK"
-( cd "$SRC/libraries" && IOS_SDK="$SDK" sh ./build-macos-libs.sh "$JOBS" )
+if ! ( cd "$SRC/libraries" && IOS_SDK="$SDK" sh ./build-macos-libs.sh "$JOBS" ); then
+    show_config_log
+    exit 1
+fi
 
 echo "### SpiderMonkey"
 sh "$HERE/tools/build-mozjs-ios.sh" "$SDK" "$SRC/libraries/source/spidermonkey"
