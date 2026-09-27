@@ -81,7 +81,9 @@ not a port — the point of asking now is to find out before touching premake.
 ## The patches
 
 `tools/get-source.sh` fetches the 0 A.D. source release and applies the stack;
-all eleven apply cleanly and in order.
+all twenty-four apply cleanly and in order. The table is the first eleven -- the
+ones that came before there was an iOS build at all; everything from 0018 on is
+described where it belongs in the sections below.
 
 | | |
 | --- | --- |
@@ -171,6 +173,32 @@ bare header for a live pid, and the stdout of an app started with `simctl
 launch` goes nowhere at all. What settled it was writing the evidence into a
 file in the app container and reading the buffer back after a bare clear:
 black, with GL_INVALID_ENUM.
+
+## Does it play?
+
+The menu is not the game. A match is where the JavaScript gets real work -- the
+map is *generated* in JS, Petra decides for two players, the simulation steps --
+and where terrain and unit meshes go through Apple's software GLES instead of a
+few hundred GUI quads. So the smoke test has a third arm, `Play a match`: the
+same bundle as the first one, started with
+
+    -autostart=random/mainland -autostart-size=128 -autostart-players=2
+    -autostart-ai=1:petra -autostart-ai=2:petra -autostart-victory=endless
+
+128 tiles instead of the default 192, because generating the map and drawing it
+both cost by area. It waits for the first turn -- up to fifteen minutes, since
+what map generation costs here is one of the things being measured -- then lets
+the match run three minutes longer, and gates on two separate claims: **a turn
+was reached**, and **the turn number is still rising**. A screenshot of terrain
+would only ever prove the first frame.
+
+What makes that readable is patch 0030. The frame note now carries a clock and
+the turn number, and fires every ten seconds as well as every three hundredth
+frame. Dividing frames by wall time was the only rate this port had so far --
+about **ten frames a second** for the main menu and **thirty-six** for the
+mod-selection screen, both at 852x393 in software, a factor the note never
+showed. At a frame a second, 300 frames would be five minutes of timeline with
+nothing in it.
 
 ## On a phone
 
@@ -279,9 +307,30 @@ about it is checked by running it.
 
 Unanswered either way: multiplayer (no classic Bluetooth, and UDP broadcast
 discovery needs Apple's multicast entitlement), whether anything is actually
-*audible* (a device opens, which is not the same as samples reaching it), how a
-JIT-less SpiderMonkey holds up in a real match, and whether an interface designed
-for a mouse can be worked with fingers.
+*audible* (a device opens, which is not the same as samples reaching it), and
+whether an interface designed for a mouse can be worked with fingers -- a match
+in the simulator does not touch the touch patches, because nothing injects
+touches there.
+
+What the missing JIT costs is being measured rather than guessed, and on macOS,
+where the question can be asked at all: `.github/workflows/bench.yml` records one
+match and replays it against two SpiderMonkeys that differ only in
+`--disable-jit`. It refuses to report unless both replays end on the same
+simulation hash (otherwise they did not compute the same match) and unless the
+two binaries differ (premake's gmake generator does not relink when only an
+external `-l` library changes, so both arms would otherwise have run the *same*
+executable and every ratio would have been 1.00). Only by hand: a cold run is
+hours.
+
+It has not produced a number yet, and both attempts failed before reaching the
+measurement -- neither for a reason that had anything to do with the JIT:
+
+* an unreachable `gmplib.org` after 75 seconds of curl, in a dependency this
+  build does not link at all (`--without-lobby`). `SKIP_LIBS` now names the five;
+* and the next attempt would have died on `-autostart="random/arcadia"` after
+  hours of building. There is no `maps/random/arcadia.json` -- arcadia is a
+  scenario -- and the guard three lines above it was verifying `$MAP`, which the
+  command had never used.
 
 Collada stays out (patch 0020): it is a second shared library loaded at runtime,
 which an `.ipa` cannot carry, and it only matters for loading *unbaked* meshes --

@@ -1,0 +1,68 @@
+Say what time it is and whether a match is running.
+
+The frame note has carried the geometry and the middle pixel since the port
+first drew anything, and both questions it was written for are answered: the
+frame is called, and something is in the buffer. What it cannot say is either of
+the two things the port is now being asked:
+
+* **How fast.** The note fires every three hundredth frame and prints no clock,
+  so the rate had to be divided out of the wall time of the whole run -- and only
+  for a run that ended exactly when the screenshots did. The menu turns out to
+  draw ten frames a second and the mod-selection screen thirty-six, which is a
+  factor the note never showed.
+* **Whether a match is running at all.** "The menu draws" and "it plays" are
+  different claims. The second one is the one that exercises the simulation,
+  Petra, the terrain and the unit meshes -- and the only one that touches the
+  JIT-less SpiderMonkey with real work.
+
+So: the clock goes into the line, and with it the turn number, behind the guard
+Frame() uses (the turn manager exists only while a game does). And the note also
+fires every ten seconds, not only every three hundredth frame: a match in the
+simulator's software renderer is expected around a frame a second, where 300
+frames would be five minutes of timeline with nothing in it.
+
+--- source/main.cpp
++++ source/main.cpp
+@@ -661,8 +661,16 @@
+ void IosFrameCallback(void*)
+ {
+ 	static int frames{0};
+-	if (frames < 3 || frames % 300 == 0)
++	static Uint32 lastNote{0};
++	// Every ten seconds as well as every three hundredth frame. A match in the
++	// simulator's software renderer is expected at about a frame a second, and
++	// 300 frames are then five minutes with nothing in between; the menu draws
++	// ten times that and the mod-selection screen thirty-six times. Only a
++	// clock in the line makes any of them comparable.
++	const Uint32 now{SDL_GetTicks()};
++	if (frames < 3 || frames % 300 == 0 || now - lastNote >= 10000)
+ 	{
++		lastNote = now;
+ 		// What the engine believes it is drawing into, and what is actually in
+ 		// the middle of the buffer when the frame is done. A screenshot of the
+ 		// simulator can be misleading -- this cannot.
+@@ -673,12 +681,21 @@
+ 		unsigned char pixel[4]{};
+ 		glReadPixels(drawableWidth / 2, drawableHeight / 2, 1, 1,
+ 			GL_RGBA, GL_UNSIGNED_BYTE, pixel);
++		// Whether a match is running, and which turn it is on: "the menu draws"
++		// and "it plays" are different claims, and only the second one puts the
++		// simulation, Petra and the terrain to work. The guard is the one
++		// Frame() uses -- the turn manager exists only while a game does.
++		char match[32]{"no match"};
++		if (g_Game && g_Game->IsGameStarted() && g_Game->GetTurnManager())
++			snprintf(match, sizeof(match), "turn %u",
++				g_Game->GetTurnManager()->GetCurrentTurn());
+ 		// g_xres/g_yres as well: the viewport comes from those, the backbuffer
+ 		// from the drawable, and when the two disagree the game draws into a
+ 		// corner of its own frame. Nothing else prints them.
+-		IosNote("frame %d: window %dx%d, drawable %dx%d, viewport %dx%d, middle pixel %u,%u,%u",
+-			frames, windowWidth, windowHeight, drawableWidth, drawableHeight,
+-			g_xres, g_yres, pixel[0], pixel[1], pixel[2]);
++		IosNote("frame %d at %u ms: window %dx%d, drawable %dx%d, viewport %dx%d, "
++			"middle pixel %u,%u,%u, %s",
++			frames, now, windowWidth, windowHeight, drawableWidth, drawableHeight,
++			g_xres, g_yres, pixel[0], pixel[1], pixel[2], match);
+ 	}
+ 	++frames;
+ 

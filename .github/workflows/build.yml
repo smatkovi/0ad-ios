@@ -223,6 +223,110 @@ jobs:
           test -z "$ECHT"
 
 
+      # The arm above proves that the menu draws. This one is the other claim,
+      # and the bigger one: that a match runs. Map generation is JavaScript on a
+      # SpiderMonkey without a JIT, then the simulation steps, Petra gives orders
+      # for two players, and terrain and unit meshes go through a GLES that Apple
+      # implements in software. Nothing about that is proven by a main menu.
+      #
+      # The gate is the turn number from the frame note (patch 0030) and not a
+      # screenshot: a picture of terrain proves one frame was drawn, a turn
+      # number that keeps rising proves the match is still going. The waiting is
+      # adaptive, because the time to the first turn is itself a measurement --
+      # nobody knows yet what map generation costs here.
+      - name: Play a match
+        id: partie
+        run: |
+          set -x
+          DEV=""
+          for name in "iPhone 16" "iPhone 15" "iPhone 14"; do
+              DEV=$(xcrun simctl create zeroad-partie "$name" 2>/dev/null) && break
+              DEV=""
+          done
+          test -n "$DEV"
+          xcrun simctl boot "$DEV"
+          xcrun simctl bootstatus "$DEV" -b
+          xcrun simctl install "$DEV" "$PWD/build/pyrogenesis.app"
+          # Wie im Ladearm: fremde Berichte wuerden diesem Lauf angerechnet.
+          rm -f ~/Library/Logs/DiagnosticReports/pyrogenesis*
+          mkdir -p out-partie
+          START=$(date +%s)
+          # 128 Felder statt der voreingestellten 192: die Karte wird in
+          # JavaScript erzeugt und hier in Software gezeichnet, und beides zahlt
+          # nach Flaeche. Zwei Petras, damit nichts auf Befehle wartet, endless,
+          # damit die Partie nicht von selbst endet, und feste Saatzahlen, damit
+          # ein langsamer und ein schneller Lauf dieselbe Partie sind.
+          xcrun simctl launch "$DEV" org.smatkovi.zeroad \
+              -autostart=random/mainland -autostart-size=128 -autostart-players=2 \
+              -autostart-ai=1:petra -autostart-ai=2:petra \
+              -autostart-aidiff=1:3 -autostart-aidiff=2:3 \
+              -autostart-seed=1 -autostart-aiseed=1 -autostart-victory=endless
+          CONTAINER=$(xcrun simctl get_app_container "$DEV" org.smatkovi.zeroad data)
+          NOTIZEN="$CONTAINER/Documents/ios-frames.txt"
+          # Bis zur ersten Runde: hoechstens 900 s, alle 10 s nachsehen.
+          ERSTE=""
+          set +x
+          while [ "$(date +%s)" -lt $((START + 900)) ]; do
+              sleep 10
+              if grep -qE "turn [0-9]+" "$NOTIZEN" 2>/dev/null; then
+                  ERSTE=$(($(date +%s) - START))
+                  break
+              fi
+          done
+          set -x
+          echo "erste Runde nach: ${ERSTE:-(keine in 900 s)}s"
+          echo "${ERSTE:-}" > out-partie/erste-runde.txt
+          xcrun simctl io "$DEV" screenshot partie-erste-runde.png || true
+          sips -r 270 partie-erste-runde.png --out partie-erste-runde.png \
+              > /dev/null 2>&1 || true
+          tail -4 "$NOTIZEN" 2>/dev/null || echo "(keine Notizen)"
+          # Und dann drei Minuten weiterspielen lassen: dass eine Runde erreicht
+          # wurde, heisst noch nicht, dass die naechste kommt.
+          WEITER=$(date +%s)
+          set +x
+          while [ "$(date +%s)" -lt $((WEITER + 180)) ]; do sleep 10; done
+          set -x
+          xcrun simctl io "$DEV" screenshot partie-danach.png || true
+          sips -r 270 partie-danach.png --out partie-danach.png > /dev/null 2>&1 || true
+          cp -R "$CONTAINER/Library/Application Support/0ad/logs" out-partie/logs || true
+          cp "$NOTIZEN" out-partie/ 2>/dev/null || true
+          cp ~/Library/Logs/DiagnosticReports/pyrogenesis* out-partie/ 2>/dev/null || true
+          xcrun simctl shutdown "$DEV" || true
+
+      - name: Did it play
+        if: always()
+        run: |
+          echo "--- Notizen"
+          cat out-partie/ios-frames.txt 2>/dev/null || echo "(keine)"
+          echo "--- Bildrate (aus der letzten Notiz: Bilder und Millisekunden)"
+          awk -F'[ ,]' '/^frame [0-9]+ at [0-9]+ ms/{f=$2; ms=$4}
+              END{ if (ms > 0) printf "%.2f Bilder/s ueber %.0f s\n", f*1000/ms, ms/1000;
+                   else print "(keine Notiz mit Uhrzeit)" }' \
+              out-partie/ios-frames.txt 2>/dev/null || true
+          echo "--- Absturzbericht?"
+          ECHT=$(grep -L XPC_EXIT_REASON_SIGTERM_TIMEOUT out-partie/*.ips 2>/dev/null || true)
+          if ls out-partie/*.ips > /dev/null 2>&1; then
+              for report in out-partie/*.ips; do
+                  tools/symbolicate.py "$report" \
+                      "$PWD/build/pyrogenesis.app/pyrogenesis" || head -40 "$report"
+              done
+          else
+              echo "(keiner)"
+          fi
+          echo "--- was die Partie im Protokoll hinterlassen hat"
+          sed -e 's/<[^>]*>//g' out-partie/logs/mainlog.html 2>/dev/null | tail -30 || true
+          # Drei Behauptungen, jede fuer sich: eine Runde wurde ueberhaupt
+          # erreicht (die Karte ist erzeugt und die Partie laeuft), die Runden
+          # steigen noch (sie laeuft weiter und haengt nicht), und das Programm
+          # hat es ueberlebt.
+          ERSTE=$(grep -oE "turn [0-9]+" out-partie/ios-frames.txt 2>/dev/null | head -1 | awk '{print $2}')
+          LETZTE=$(grep -oE "turn [0-9]+" out-partie/ios-frames.txt 2>/dev/null | tail -1 | awk '{print $2}')
+          echo "erste gemeldete Runde: ${ERSTE:-(keine)} / letzte: ${LETZTE:-(keine)}"
+          echo "Sekunden bis zur ersten Runde: $(cat out-partie/erste-runde.txt 2>/dev/null)"
+          test -n "$LETZTE"
+          [ "$LETZTE" -gt "$ERSTE" ]
+          test -z "$ECHT"
+
       # The other shape of this port: nothing in the bundle, the app fetches the
       # data itself (patch 0029). Tested with the manifest that cuts the base mod
       # into 8 MiB parts -- 93 MB instead of 3.5 GB -- because what needs testing
@@ -327,5 +431,7 @@ jobs:
           path: |
             out
             out-laden
+            out-partie
             simulator*.png
             laden*.png
+            partie-*.png
