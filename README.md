@@ -194,11 +194,37 @@ would only ever prove the first frame.
 
 What makes that readable is patch 0030. The frame note now carries a clock and
 the turn number, and fires every ten seconds as well as every three hundredth
-frame. Dividing frames by wall time was the only rate this port had so far --
-about **ten frames a second** for the main menu and **thirty-six** for the
-mod-selection screen, both at 852x393 in software, a factor the note never
-showed. At a frame a second, 300 frames would be five minutes of timeline with
-nothing in it.
+frame. Dividing frames by wall time was the only rate this port had so far, and
+only for a run that ended exactly when the screenshots did.
+
+**And it plays.** The first turn arrives **27 seconds** after launch -- that is
+`random/mainland` at 128 tiles, generated in JavaScript on a SpiderMonkey without
+a JIT -- and four minutes later it is still going:
+
+    frame  137 at  27387 ms: ... middle pixel  0, 0, 0, turn 1
+    frame  951 at 196004 ms: ... middle pixel 76,68,59, turn 703
+    frame 1500 at 276058 ms: ... middle pixel 77,69,60, turn 1101
+
+Three numbers come out of that, and the third is the one worth having:
+
+* **7 frames a second** in the match, over the last eighty seconds (5.5 across
+  the whole run, which still carries the first draws). The menu manages 11.
+* **4.4 simulation turns a second** against the 5 that a 200 ms turn length asks
+  for: the simulation stayed **within twelve percent of real time**, with two
+  Petras at difficulty 3 deciding for two players and the session GUI on top.
+* And `mainlog.html` says what they were doing. Animations are loaded when a unit
+  first needs one, so `carry_meat`, `gather_fruit`, `walk_pickaxe` and
+  `attack_ranged_hip` are gatherers gathering and archers shooting -- not a map
+  standing still.
+
+The screenshot after those four minutes is a Ptolemaic game at 31/40 population,
+with farms, trees, sheep, and both players' territory on the minimap. The only
+crash report in the arm is `XPC_EXIT_REASON_SIGTERM_TIMEOUT`, which is what
+`simctl shutdown` does to a game inside a frame callback.
+
+What none of it settles is the phone. **The simulator runs the same arm64 code on
+the Mac's own CPU**: the JavaScript here is as fast as the host and only the
+graphics are software. A phone reverses both sides of that.
 
 ## On a phone
 
@@ -308,9 +334,9 @@ about it is checked by running it.
 Unanswered either way: multiplayer (no classic Bluetooth, and UDP broadcast
 discovery needs Apple's multicast entitlement), whether anything is actually
 *audible* (a device opens, which is not the same as samples reaching it), and
-whether an interface designed for a mouse can be worked with fingers -- a match
-in the simulator does not touch the touch patches, because nothing injects
-touches there.
+whether an interface designed for a mouse can be worked with fingers -- the match
+above does not touch the touch patches, because nothing injects touches into a
+simulator.
 
 What the missing JIT costs is being measured rather than guessed, and on macOS,
 where the question can be asked at all: `.github/workflows/bench.yml` records one
