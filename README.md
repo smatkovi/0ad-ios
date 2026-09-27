@@ -205,17 +205,36 @@ a JIT -- and four minutes later it is still going:
     frame  951 at 196004 ms: ... middle pixel 76,68,59, turn 703
     frame 1500 at 276058 ms: ... middle pixel 77,69,60, turn 1101
 
-Three numbers come out of that, and the third is the one worth having:
+`mainlog.html` says what they were doing, too. Animations are loaded when a unit
+first needs one, so `carry_meat`, `gather_fruit`, `walk_pickaxe` and
+`attack_ranged_hip` are gatherers gathering and archers shooting -- not a map
+standing still.
 
-* **7 frames a second** in the match, over the last eighty seconds (5.5 across
-  the whole run, which still carries the first draws). The menu manages 11.
-* **4.4 simulation turns a second** against the 5 that a 200 ms turn length asks
-  for: the simulation stayed **within twelve percent of real time**, with two
-  Petras at difficulty 3 deciding for two players and the session GUI on top.
-* And `mainlog.html` says what they were doing. Animations are loaded when a unit
-  first needs one, so `carry_meat`, `gather_fruit`, `walk_pickaxe` and
-  `attack_ranged_hip` are gatherers gathering and archers shooting -- not a map
-  standing still.
+**The rate is not one number, and the reason is worth more than the number.** The
+arm has run twice on the same commit, same seeds, same match:
+
+| | frames/s | turns/s | first turn |
+| --- | --- | --- | --- |
+| run 1 | 5.48 | 4.42 | 27 s |
+| run 2 | 2.86 | 2.85 | 25 s |
+
+A factor of two between two runs of the same code -- that is the runner, and it
+is why the honest figure here is a range. But look at the second column against
+the first, and the engine says exactly why:
+
+    // At the normal sim rate, we currently want to render at least one
+    // frame per simulation turn, so let maxTurns be 1.
+    size_t maxTurns = (size_t)m_SimRate;                    // ps/Game.cpp:433
+
+**At most one simulation turn per drawn frame, by design.** So the simulation
+rate is `min(5, frames per second)` -- five because a turn is 200 ms -- and both
+runs land on it: run 1 draws fast enough for the 5/s ceiling to bind (4.42 after
+overhead), run 2 is frame-bound and comes out at exactly one turn per frame.
+
+Which settles what is actually slow here, and it is **not** the JavaScript. The
+benchmark below replays a whole match without a JIT at sixty turns a second on
+this class of machine; the simulation has an order of magnitude of headroom. What
+sets the pace in the simulator is Apple's software renderer.
 
 The screenshot after those four minutes is a Ptolemaic game at 31/40 population,
 with farms, trees, sheep, and both players' territory on the minimap. The only
@@ -325,19 +344,34 @@ the wrong flags, or a header path pointing somewhere else:
 Two of these are worth sending upstream: the `StringBuilder.h` include and the
 missing `enet` in the lobby stub's library list.
 
-## What the missing JIT costs: 3.3x
+## What the missing JIT costs: 4.6x
 
 Measured rather than guessed, and on macOS, where the question can be asked at
 all: `.github/workflows/bench.yml` records one match and replays it against two
 SpiderMonkeys that differ in nothing but `--disable-jit`.
 
-    Wiederholung: 17133 Runden
-    jit:    66 s, Endzustand c87c99fd688a97dd4ff45bf27698e49a
-    nojit: 218 s, Endzustand c87c99fd688a97dd4ff45bf27698e49a
+    Wiederholung: 19533 Runden
+    jit:    70 s, Endzustand df5d2b12b1fc033dd1e3a4728259a0b9
+    nojit: 319 s, Endzustand df5d2b12b1fc033dd1e3a4728259a0b9
+    jit2:   71 s, Endzustand df5d2b12b1fc033dd1e3a4728259a0b9
+    Verhaeltnis: 4.56x   (Rauschen zwischen den beiden JIT-Laeufen: 1.01x)
 
-The fixture is an hour of game time -- 17133 turns out of a sixty-second headless
+The fixture is an hour of game time -- 19533 turns out of a sixty-second headless
 recording, two Petras on `random/mainland`, victory condition `endless` so the
-length is decided by the script and not by how the match goes.
+length is decided by the script and not by how the match goes. The third run is
+the noise control: the same jit binary a second time, one percent apart, which is
+what makes 4.56 a measurement rather than a sample.
+
+An earlier run of the same benchmark died after printing its first two numbers
+and gave **3.30x** on a shorter fixture -- 17133 turns of the *same* match, from
+a slower runner recording fewer turns in its sixty seconds. The ratio grows with
+the fixture, which makes sense: later turns carry more units, and more units is
+more Petra, which is more JavaScript.
+
+Either way the absolute numbers say something the ratio hides. Sixty-five minutes
+of game time replays in 319 seconds without a JIT -- **sixty turns a second**,
+twelve times faster than the match is played. That is the headroom the iOS
+simulator's 3-to-5 turns a second is not using.
 
 The hash is what makes the two times comparable: both runs computed the same
 match. The benchmark refuses to report without it, and it refuses just as hard if
@@ -348,19 +382,15 @@ executable and every ratio would have come out 1.00, green. The binary is delete
 before each link for that reason. For good measure the nojit tier carries **0
 vixl symbols** against 2775 in the other, so `--disable-jit` demonstrably arrived.
 
-Three and a bit, then. And the match in the simulator still held to within twelve
-percent of real time on top of that -- at five turns a second on 128 tiles with
-two Petras the simulation is nowhere near its limit, and that margin is what a
-phone gets to spend.
-
-It took four runs to produce the number, and not one of them failed over the JIT:
+It took five runs to produce the number, and not one of them failed over the JIT:
 an unreachable `gmplib.org` in a dependency this build does not link
 (`--without-lobby`, now in `SKIP_LIBS`); a missing `cbindgen`, which 0 A.D.'s own
 SpiderMonkey script forbids mach to fetch; a cached `.already-built` stamp for
 cxxtest *without* the directory it is about, which `mocks_real` compiles against;
-and `-autostart="random/arcadia"`, a map that does not exist -- arcadia is a
+`-autostart="random/arcadia"`, a map that does not exist -- arcadia is a
 scenario, and the guard three lines above it was checking a variable the command
-never used.
+never used; and finally the noise control itself, which copied a binary named
+`pyrogenesis-jit2` that no stage had ever linked.
 
 ## Next
 
