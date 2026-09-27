@@ -3,6 +3,14 @@
 # the build time, and the debug variant does not compile on armv7hl at all
 # (-O0 runs out of registers in the generated 64-bit atomics: "asm operand has
 # impossible constraints").
+
+Ergaenzt im iOS-Port: der Darwin-Zweig kopiert die Debug-Bibliothek ebenfalls
+und war nicht gewaechselt. Mit SKIP_JS_DEBUG gibt es kein build-debug/, der cp
+scheitert, und `set -e` beendet das Skript -- nach dem vollstaendigen
+Release-Bau. Aufgefallen ist das nie, weil dieser Patch vom Sailfish-Port kommt
+und hier noch nie auf Darwin gelaufen ist: der iOS-Pfad baut SpiderMonkey mit
+einem eigenen Skript.
+
 --- libraries/source/spidermonkey/build.sh
 +++ libraries/source/spidermonkey/build.sh
 @@ -151,7 +151,7 @@
@@ -23,7 +31,16 @@
  	mkdir include-debug
  	cp -R -L "${FOLDER}"/build-debug/dist/include/* include-debug/
  fi
-@@ -240,7 +240,7 @@
+@@ -224,5 +224,7 @@
+ if [ "${OS}" = "Darwin" ]; then
+ 	# On MacOS, copy the static libraries only.
+-	cp -L "${FOLDER}/build-${DEB}/js/src/build/${LIB_PREFIX}js_static${LIB_SUFFIX}" "lib/${LIB_PREFIX}${LIB_NAME}-${DEB}${LIB_SUFFIX}"
++	if [ -z "${SKIP_JS_DEBUG}" ]; then
++		cp -L "${FOLDER}/build-${DEB}/js/src/build/${LIB_PREFIX}js_static${LIB_SUFFIX}" "lib/${LIB_PREFIX}${LIB_NAME}-${DEB}${LIB_SUFFIX}"
++	fi
+ 	cp -L "${FOLDER}/build-${REL}/js/src/build/${LIB_PREFIX}js_static${LIB_SUFFIX}" "lib/${LIB_PREFIX}${LIB_NAME}-${REL}${LIB_SUFFIX}"
+ elif [ "${OS}" = "Windows_NT" ]; then
+@@ -240,7 +242,7 @@
  else
  	# Copy shared libs to lib/, they will also be copied to binaries/system, so the compiler and executable (resp.) can find them.
  	cp -L "${FOLDER}/build-${REL}/dist/bin/${LIB_PREFIX}${LIB_NAME}-${REL}${LIB_SUFFIX}" "lib/${LIB_PREFIX}${LIB_NAME}-${REL}${LIB_SUFFIX}"

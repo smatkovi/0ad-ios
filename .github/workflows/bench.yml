@@ -1,0 +1,153 @@
+name: "Bench: JIT vs no JIT"
+
+# What does the port pay for SpiderMonkey's missing JIT? Measured on macOS, not
+# on iOS: this arm needs no bundle, no simulator, no watchdog and no patch, and
+# it is the only one that can produce the ratio at all. The absolute number on a
+# device comes later.
+#
+# Its own caches throughout. build-macos-libs.sh installs into libraries/macos
+# and upstream's SpiderMonkey build wipes lib/ and include-release/, so sharing
+# a cache namespace with the port's own build would poison the only regression
+# gate it has.
+
+# Nur von Hand. Ein kalter Lauf dauert Stunden; bei jedem Push einen zu starten,
+# waehrend genau an diesem Skript gearbeitet wird, waere Unfug.
+on:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    name: A replayed match, twice
+    runs-on: macos-14
+    timeout-minutes: 330
+    env:
+      SRC: ${{ github.workspace }}/ext-bench/0ad-0.28.0
+      # Der Debug-SpiderMonkey wird nirgends gebunden und kostet die Haelfte der
+      # Bauzeit. Patch 0007 macht das moeglich -- inklusive des Darwin-Zweiges,
+      # der dort bis heute fehlte.
+      SKIP_JS_DEBUG: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: brew install ninja autoconf automake libtool
+
+      # Free, and it settles a standing contradiction in this repository: the
+      # README says the stdout of an app started with simctl goes nowhere, the
+      # build workflow says the system log has it. If simctl can redirect, the
+      # iOS arm of this benchmark needs no patch at all.
+      - name: Can simctl redirect stdout?
+        run: |
+          xcrun simctl help launch || true
+          xcrun simctl help launch 2>&1 | grep -iE "stdout|stderr" \
+              || echo "(keine Umleitung -- der iOS-Arm braucht dann Patch 0029)"
+
+      - name: Cache the 0 A.D. source tarball
+        uses: actions/cache@v4
+        with:
+          path: ext-bench/0ad-0.28.0-unix-build.tar.xz
+          key: bench-zeroad-src-0.28.0
+
+      # The same game data the port's own smoke test uses, same key: read-only
+      # sharing saves a 1.4 GB download and cannot poison anything.
+      - name: Cache the game data
+        id: cache-data
+        uses: actions/cache@v4
+        with:
+          path: ext/smoke-data
+          key: smoke-data-0.28.0-mit-public
+
+      - name: Fetch the game data
+        if: steps.cache-data.outputs.cache-hit != 'true'
+        run: tools/get-mod-data.sh
+
+      - name: Fetch and patch the source
+        run: tools/get-source.sh "${{ github.workspace }}/ext-bench"
+
+      - name: Die Abhaengigkeits-SpiderMonkey ueberspringen
+        # Die Messung baut beide Stufen ohnehin selbst, mit --force-rebuild.
+        # Die Zeichenkette muss LIB_VERSION aus build.sh entsprechen.
+        run: |
+          mkdir -p "$SRC/libraries/source/spidermonkey"
+          echo "128.13.0+wfg4" > "$SRC/libraries/source/spidermonkey/.already-built"
+
+      - name: Restore the macOS dependencies
+        id: cache-deps
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ext-bench/0ad-0.28.0/libraries/macos
+            ext-bench/0ad-0.28.0/libraries/source/fcollada/lib
+            ext-bench/0ad-0.28.0/libraries/source/fcollada/.already-built
+            ext-bench/0ad-0.28.0/libraries/source/nvtt/lib
+            ext-bench/0ad-0.28.0/libraries/source/nvtt/.already-built
+            ext-bench/0ad-0.28.0/libraries/source/cxxtest-4.4/.already-built
+            ext-bench/0ad-0.28.0/libraries/source/premake-core/bin
+            ext-bench/0ad-0.28.0/libraries/source/premake-core/.already-built
+            ext-bench/0ad-0.28.0/binaries/system/libMoltenVK.dylib
+          key: bench-deps-macos-0.28.0-v1
+          restore-keys: bench-deps-macos-0.28.0-v1-
+
+      - name: Build the macOS dependencies
+        # Ohne if: der Wiederherstellungs-Schluessel trifft nie exakt, und die
+        # Stempel in libraries/macos ueberspringen ohnehin, was schon da ist.
+        run: |
+          set -o pipefail
+          ( cd "$SRC/libraries" && sh ./build-macos-libs.sh -j3 ) 2>&1 | tail -n 200
+
+      - name: Save the macOS dependencies
+        if: always() && steps.cache-deps.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ext-bench/0ad-0.28.0/libraries/macos
+            ext-bench/0ad-0.28.0/libraries/source/fcollada/lib
+            ext-bench/0ad-0.28.0/libraries/source/fcollada/.already-built
+            ext-bench/0ad-0.28.0/libraries/source/nvtt/lib
+            ext-bench/0ad-0.28.0/libraries/source/nvtt/.already-built
+            ext-bench/0ad-0.28.0/libraries/source/cxxtest-4.4/.already-built
+            ext-bench/0ad-0.28.0/libraries/source/premake-core/bin
+            ext-bench/0ad-0.28.0/libraries/source/premake-core/.already-built
+            ext-bench/0ad-0.28.0/binaries/system/libMoltenVK.dylib
+          key: bench-deps-macos-0.28.0-v1-${{ github.run_id }}
+
+      - name: Restore the two SpiderMonkey tiers
+        id: cache-tiers
+        uses: actions/cache/restore@v4
+        with:
+          path: ext-bench/0ad-0.28.0/bench-tiers
+          key: bench-tiers-macos-0.28.0-v1
+          restore-keys: bench-tiers-macos-0.28.0-v1-
+
+      - name: Wieviel Platz ist noch?
+        run: df -h /
+
+      - name: Record a match and replay it against both SpiderMonkeys
+        run: tools/bench-macos.sh "$SRC" "$PWD/ext/smoke-data" "$PWD/out"
+
+      - name: Save the two SpiderMonkey tiers
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ext-bench/0ad-0.28.0/bench-tiers
+          key: bench-tiers-macos-0.28.0-v1-${{ github.run_id }}
+
+      - name: What it cost
+        if: always()
+        run: |
+          echo "--- Ergebnis"
+          cat out/result.txt 2>/dev/null || echo "(keins)"
+          echo "--- die beiden Programme (muessen sich unterscheiden)"
+          cat out/binaries.txt 2>/dev/null || true
+          echo "--- Profil, mit JIT"
+          head -25 out/profile-jit.txt 2>/dev/null || true
+          echo "--- Profil, ohne JIT"
+          head -25 out/profile-nojit.txt 2>/dev/null || true
+          echo "--- Platz und Groessen"
+          df -h / || true
+          du -sh out "$SRC/bench-tiers" "$SRC/libraries/macos" 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-macos
+          path: out
