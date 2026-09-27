@@ -136,6 +136,13 @@ JavaScript on a SpiderMonkey without a JIT, all of it working.
     frame 1: window 852x393, drawable 852x393, viewport 852x393,
              middle pixel 87,86,87
 
+**And it has sound.** openal-soft's CoreAudio backend opens a device in the
+headless simulator, which was the one thing about the audio that could not be
+settled from any source:
+
+    Sound Card     : CoreAudio Default;
+    Sound Drivers  : 1.1 ALSOFT 1.24.2
+
 It drew sideways in a corner at first, and the reason was not the one that
 looked obvious. The simulator *does* rotate the app to landscape -- it simply
 captures in the device's native portrait. What put the picture in the corner was
@@ -213,7 +220,6 @@ The `.app` bundle and `pyrogenesis -mod=mod` in the simulator - the mod
 selection screen needs a few MB instead of 3.5 GB, which makes it the right
 first thing to look at.
 
-Unanswered either way: multiplayer, whether openal-soft's CoreAudio backend
-opens a device in a headless simulator (a missing one is harmless -- the sound
-manager logs a warning and stays null), and how a JIT-less SpiderMonkey holds up
-in a real match.
+Unanswered either way: multiplayer, whether anything is actually *audible*
+(a device opens, which is not the same as samples reaching it), and how a
+JIT-less SpiderMonkey holds up in a real match.
