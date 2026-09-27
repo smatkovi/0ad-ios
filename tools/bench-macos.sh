@@ -190,10 +190,17 @@ TURNS=$(grep -c '^turn ' "$OUT/fixture.txt" || true)
 echo "### Wiederholung: $TURNS Runden"
 
 # --- replay it once per tier ----------------------------------------------
+# replay_tier <name> [programm]
+#
+# Der Name ist die Zeile im Ergebnis, das Programm die gebundene Stufe. Die
+# Rauschkontrolle misst dieselbe jit-Stufe ein zweites Mal -- unter eigenem
+# Namen, aber es gibt kein Programm namens jit2, und genau daran ist der erste
+# Lauf gestorben, der beide Messwerte schon hatte.
 replay_tier()
 {
     tier=$1
-    cp "$TIERS/pyrogenesis-$tier" "$BIN"
+    programm=${2:-$1}
+    cp "$TIERS/pyrogenesis-$programm" "$BIN"
     cd "$SRC/binaries/system"
     rm -f profile.txt profile2.jsonp
     START=$(date +%s)
@@ -217,7 +224,7 @@ replay_tier nojit
 # Noch einmal die erste Stufe: drei Kerne, drei Arbeits-Threads neben dem
 # Hauptthread -- ohne eine Wiederholung laesst sich ein Verhaeltnis von 1,15
 # nicht von Rauschen unterscheiden.
-replay_tier jit2
+replay_tier jit2 jit
 
 # --- erst pruefen, dann rechnen -----------------------------------------
 HASH_JIT=$(awk '$1=="jit"{print $3}' "$OUT/result.txt")

@@ -325,6 +325,43 @@ the wrong flags, or a header path pointing somewhere else:
 Two of these are worth sending upstream: the `StringBuilder.h` include and the
 missing `enet` in the lobby stub's library list.
 
+## What the missing JIT costs: 3.3x
+
+Measured rather than guessed, and on macOS, where the question can be asked at
+all: `.github/workflows/bench.yml` records one match and replays it against two
+SpiderMonkeys that differ in nothing but `--disable-jit`.
+
+    Wiederholung: 17133 Runden
+    jit:    66 s, Endzustand c87c99fd688a97dd4ff45bf27698e49a
+    nojit: 218 s, Endzustand c87c99fd688a97dd4ff45bf27698e49a
+
+The fixture is an hour of game time -- 17133 turns out of a sixty-second headless
+recording, two Petras on `random/mainland`, victory condition `endless` so the
+length is decided by the script and not by how the match goes.
+
+The hash is what makes the two times comparable: both runs computed the same
+match. The benchmark refuses to report without it, and it refuses just as hard if
+the two binaries hash the same -- premake's gmake generator lists only sibling
+projects as link dependencies, and mozjs arrives as an external `-l`, so swapping
+the library and running make relinks *nothing*. Both arms would have run the same
+executable and every ratio would have come out 1.00, green. The binary is deleted
+before each link for that reason. For good measure the nojit tier carries **0
+vixl symbols** against 2775 in the other, so `--disable-jit` demonstrably arrived.
+
+Three and a bit, then. And the match in the simulator still held to within twelve
+percent of real time on top of that -- at five turns a second on 128 tiles with
+two Petras the simulation is nowhere near its limit, and that margin is what a
+phone gets to spend.
+
+It took four runs to produce the number, and not one of them failed over the JIT:
+an unreachable `gmplib.org` in a dependency this build does not link
+(`--without-lobby`, now in `SKIP_LIBS`); a missing `cbindgen`, which 0 A.D.'s own
+SpiderMonkey script forbids mach to fetch; a cached `.already-built` stamp for
+cxxtest *without* the directory it is about, which `mocks_real` compiles against;
+and `-autostart="random/arcadia"`, a map that does not exist -- arcadia is a
+scenario, and the guard three lines above it was checking a variable the command
+never used.
+
 ## Next
 
 An iPhone. Everything about the device build is checked statically -- that not
@@ -337,26 +374,6 @@ discovery needs Apple's multicast entitlement), whether anything is actually
 whether an interface designed for a mouse can be worked with fingers -- the match
 above does not touch the touch patches, because nothing injects touches into a
 simulator.
-
-What the missing JIT costs is being measured rather than guessed, and on macOS,
-where the question can be asked at all: `.github/workflows/bench.yml` records one
-match and replays it against two SpiderMonkeys that differ only in
-`--disable-jit`. It refuses to report unless both replays end on the same
-simulation hash (otherwise they did not compute the same match) and unless the
-two binaries differ (premake's gmake generator does not relink when only an
-external `-l` library changes, so both arms would otherwise have run the *same*
-executable and every ratio would have been 1.00). Only by hand: a cold run is
-hours.
-
-It has not produced a number yet, and both attempts failed before reaching the
-measurement -- neither for a reason that had anything to do with the JIT:
-
-* an unreachable `gmplib.org` after 75 seconds of curl, in a dependency this
-  build does not link at all (`--without-lobby`). `SKIP_LIBS` now names the five;
-* and the next attempt would have died on `-autostart="random/arcadia"` after
-  hours of building. There is no `maps/random/arcadia.json` -- arcadia is a
-  scenario -- and the guard three lines above it was verifying `$MAP`, which the
-  command had never used.
 
 Collada stays out (patch 0020): it is a second shared library loaded at runtime,
 which an `.ipa` cannot carry, and it only matters for loading *unbaked* meshes --
