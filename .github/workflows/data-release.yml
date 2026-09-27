@@ -44,7 +44,12 @@ jobs:
           NO_UPLOAD: ${{ inputs.dry_run && '1' || '' }}
           REPO: ${{ github.repository }}
           WORK: ${{ runner.temp }}/data-release
-        run: tools/make-data-release.sh | tee "$RUNNER_TEMP/release.log"
+        run: |
+          # pipefail, sonst ist der Ausgang von tee der des Schrittes: der erste
+          # Lauf meldete Erfolg, waehrend das Hochladen von public.zip mit
+          # "HTTP 422" abgelehnt worden war (ueber 2 GiB).
+          set -o pipefail
+          tools/make-data-release.sh | tee "$RUNNER_TEMP/release.log"
 
       - name: Manifest in die Zusammenfassung
         if: always()
