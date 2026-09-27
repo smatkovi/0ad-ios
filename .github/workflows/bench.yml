@@ -81,8 +81,6 @@ jobs:
         with:
           path: |
             ext-bench/0ad-0.28.0/libraries/macos
-            ext-bench/0ad-0.28.0/libraries/source/fcollada/lib
-            ext-bench/0ad-0.28.0/libraries/source/fcollada/.already-built
             ext-bench/0ad-0.28.0/libraries/source/nvtt/lib
             ext-bench/0ad-0.28.0/libraries/source/nvtt/.already-built
             ext-bench/0ad-0.28.0/libraries/source/premake-core/bin
@@ -91,15 +89,25 @@ jobs:
           key: bench-deps-macos-0.28.0-v1
           restore-keys: bench-deps-macos-0.28.0-v1-
 
-      # Ein wiederhergestellter Stempel ohne seinen Baum ist eine Luege. cxxtest
-      # wird nur ausgepackt, nicht gebaut, also stand in der Zwischenablage die
-      # Marke "schon gebaut" und keine einzige Kopfdatei -- und der Motor
-      # uebersetzt gegen sie: `source/mocks/dlfcn.h` bindet <cxxtest/Mock.h> ein,
-      # und `pyrogenesis` haengt an `mocks_real`. Das hat einen Lauf gekostet, der
-      # bis zum Binden gekommen war. Aus der Liste oben ist der Stempel jetzt
-      # heraus; die alten Zwischenablagen haben ihn noch, deshalb hier loeschen.
-      - name: Den cxxtest-Stempel ohne cxxtest wegwerfen
-        run: rm -f "$SRC/libraries/source/cxxtest-4.4/.already-built"
+      # Ein wiederhergestellter Stempel ohne seinen Baum ist eine Luege, und sie
+      # hat zwei Laeufe gekostet -- beide erst beim Uebersetzen des Motors:
+      #
+      #   cxxtest/Mock.h file not found -- cxxtest wird nur ausgepackt, nie
+      #     gebaut, also lag die Marke "schon gebaut" ohne eine einzige
+      #     Kopfdatei da. `source/mocks/dlfcn.h` bindet sie ein und
+      #     `pyrogenesis` haengt an `mocks_real`.
+      #   FCollada.h file not found -- dasselbe mit fcollada, dessen lib und
+      #     Stempel zwischengespeichert waren und dessen Quellbaum nicht. Auf
+      #     **macOS** wird das Collada-Modul gebaut: Patch 0020 nimmt es nur aus
+      #     dem iOS-Zweig heraus, und darum faellt es nur hier auf.
+      #
+      # Aus der Liste oben sind beide heraus; die schon geschriebenen
+      # Zwischenablagen tragen sie weiter, deshalb hier loeschen. Was bleibt, ist
+      # libraries/macos -- fertige Installationen, die fuer sich stehen.
+      - name: Stempel ohne ihren Baum wegwerfen
+        run: |
+          rm -f "$SRC/libraries/source/cxxtest-4.4/.already-built"
+          rm -f "$SRC/libraries/source/fcollada/.already-built"
 
       - name: Build the macOS dependencies
         # Ohne if: der Wiederherstellungs-Schluessel trifft nie exakt, und die
@@ -125,8 +133,6 @@ jobs:
         with:
           path: |
             ext-bench/0ad-0.28.0/libraries/macos
-            ext-bench/0ad-0.28.0/libraries/source/fcollada/lib
-            ext-bench/0ad-0.28.0/libraries/source/fcollada/.already-built
             ext-bench/0ad-0.28.0/libraries/source/nvtt/lib
             ext-bench/0ad-0.28.0/libraries/source/nvtt/.already-built
             ext-bench/0ad-0.28.0/libraries/source/premake-core/bin
