@@ -93,8 +93,15 @@ fi
 
 # Reachable from the Files app: the game writes its log and the frame notes to
 # Documents, and on a phone that is the only way to ever read them.
+#
+# It takes *both* keys, and this bundle had only the first one. UIFileSharingEnabled
+# puts Documents in Finder's file sharing over a cable; what makes the folder
+# appear in the Files app on the phone itself is
+# LSSupportsOpeningDocumentsInPlace. With one of the two, reading the frame notes
+# needs a Mac -- which rather defeats the point of writing them.
 if [ "$PLATFORM" = iphoneos ]; then
     SHARING='	<key>UIFileSharingEnabled</key><true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key><true/>
 	<key>UIRequiredDeviceCapabilities</key><array><string>arm64</string></array>'
 else
     SHARING=""
