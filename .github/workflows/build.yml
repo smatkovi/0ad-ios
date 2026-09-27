@@ -194,6 +194,10 @@ jobs:
           echo "--- mainlog"
           sed -e 's/<[^>]*>//g' out/logs/mainlog.html 2>/dev/null | tail -60 || true
           echo "--- Absturzbericht?"
+          # XPC_EXIT_REASON_SIGTERM_TIMEOUT ist keiner: `simctl shutdown` schickt
+          # SIGTERM, und ein Spiel mitten im Bildrueckruf beantwortet das nicht,
+          # also raeumt das System es ab. Alles andere zaehlt.
+          ECHT=$(grep -L XPC_EXIT_REASON_SIGTERM_TIMEOUT out/*.ips 2>/dev/null || true)
           if ls out/*.ips > /dev/null 2>&1; then
               for report in out/*.ips; do
                   tools/symbolicate.py "$report" \
@@ -216,7 +220,8 @@ jobs:
           test -f "out/logs/system_info.txt"
           # And a crash report means it did not survive, whatever the logs say.
           # The job reported success twice while the game was dying.
-          ! ls out/*.ips > /dev/null 2>&1
+          test -z "$ECHT"
+
 
       # The other shape of this port: nothing in the bundle, the app fetches the
       # data itself (patch 0029). Tested with the manifest that cuts the base mod
@@ -246,6 +251,10 @@ jobs:
           xcrun simctl boot "$DEV"
           xcrun simctl bootstatus "$DEV" -b
           xcrun simctl install "$DEV" "$PWD/build/laden.app"
+          # Die erste Probe hat ihre Berichte schon beurteilt; was hier liegen
+          # bleibt, wuerde sonst diesem Lauf angerechnet (beide Programme heissen
+          # pyrogenesis).
+          rm -f ~/Library/Logs/DiagnosticReports/pyrogenesis*
           START=$(date +%s)
           # -mod=mod: this manifest has no public.zip, and the base mod on its own
           # is the mod-selection screen.
@@ -278,6 +287,8 @@ jobs:
           echo "--- Notizen"
           cat out-laden/ios-frames.txt 2>/dev/null || echo "(keine)"
           echo "--- Absturzbericht?"
+          # Wie oben: nur was nicht am Herunterfahren gestorben ist.
+          ECHT=$(grep -L XPC_EXIT_REASON_SIGTERM_TIMEOUT out-laden/*.ips 2>/dev/null || true)
           if ls out-laden/*.ips > /dev/null 2>&1; then
               for report in out-laden/*.ips; do
                   tools/symbolicate.py "$report" \
@@ -293,7 +304,7 @@ jobs:
           grep -q "mods/mod/mod.zip: complete and verified" out-laden/ios-frames.txt
           grep -q "data complete in" out-laden/ios-frames.txt
           test -f out-laden/logs/system_info.txt
-          ! ls out-laden/*.ips > /dev/null 2>&1
+          test -z "$ECHT"
 
       - name: Collect the logs
         if: always()

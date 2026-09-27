@@ -174,8 +174,10 @@ black, with GL_INVALID_ENUM.
 
 ## On a phone
 
-Nothing in this port has ever run on an iPhone -- but the build for one exists,
-and what it does differently is worth writing down.
+Nothing in this port has ever run on an iPhone -- but the build for one exists
+and came out right on its first attempt: **a 25 MB unsigned `.ipa`**, every slice
+in it stamped IOS rather than IOSSIMULATOR, the dependencies for `iphoneos`
+included. What it does differently is worth writing down.
 
 **The bundle carries no game data.** `tools/make-app.sh <quellbaum> - <ziel.app>`
 leaves it out and puts a manifest in instead; `tools/make-ipa.sh` wraps the
@@ -206,6 +208,15 @@ The download is the one thing here that cannot be tried on the platform it is
 for. It is tried at a different size instead: the simulator build also runs with
 no data in the bundle and a manifest that cuts the 89 MB base mod into twelve
 parts, which is the same arithmetic and the same return into `RunGameOrAtlas`.
+That run works end to end --
+
+    download: 89 MB to fetch, 22897 MB free
+    download: ranges: yes, six at a time
+    download: mods/mod/mod.zip: complete and verified
+    download: data complete in .../Application Support/0ad/data
+
+-- and the screen that follows is the mod selection, drawn from a file that was
+not in the bundle four minutes earlier.
 
 What a phone should do better than the simulator, for once: real GLES 3.x
 hardware instead of Apple's software renderer (patch 0024 does not even apply

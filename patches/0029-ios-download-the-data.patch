@@ -131,7 +131,7 @@ downloaded.
 +#endif // IOS_DATA_DOWNLOAD_H
 --- /dev/null
 +++ source/lib/sysdep/os/osx/ios_data_download.mm
-@@ -0,0 +1,953 @@
+@@ -0,0 +1,1003 @@
 +/* Copyright (C) 2026 Wildfire Games.
 + *
 + * Permission is hereby granted, free of charge, to any person obtaining
@@ -550,6 +550,7 @@ downloaded.
 +
 +@interface ZeroADDownloadScreen : NSObject
 +- (void)show;
++- (void)retryTapped;
 +- (void)setLine:(NSString*)line detail:(NSString*)detail fraction:(double)fraction;
 +- (void)showError:(NSString*)text retry:(void (^)(void))retry;
 +- (void)hide;
@@ -562,6 +563,7 @@ downloaded.
 +	UILabel* _detail;
 +	UIProgressView* _bar;
 +	UIButton* _retry;
++	void (^_again)(void);
 +}
 +
 +- (void)show
@@ -607,6 +609,12 @@ downloaded.
 +		_retry.frame = CGRectMake(width * 0.35, height / 2 + 50, width * 0.3, 40);
 +		_retry.autoresizingMask = centred;
 +		_retry.hidden = YES;
++		[_retry setTitle:@"Try again" forState:UIControlStateNormal];
++		// A target and a selector, not a UIAction: the block-based control API is
++		// iOS 14, the deployment target here is 13, and this is wired up exactly
++		// once -- adding an action per failure would run the download twice.
++		[_retry addTarget:self action:@selector(retryTapped)
++			forControlEvents:UIControlEventTouchUpInside];
 +		[controller.view addSubview:_retry];
 +
 +		_window.rootViewController = controller;
@@ -637,27 +645,27 @@ downloaded.
 +		_line.text = @"The download did not finish";
 +		_detail.text = text;
 +		_bar.hidden = YES;
-+		[_retry setTitle:@"Try again" forState:UIControlStateNormal];
-+		// A block-backed action instead of a target and a selector: there is no
-+		// object here that wants to own one. It carries an identifier so that a
-+		// second failure replaces the action instead of adding another one --
-+		// two actions would mean two downloads on the next tap.
-+		[_retry removeActionForIdentifier:@"retry"
-+			forControlEvents:UIControlEventTouchUpInside];
-+		[_retry addAction:[UIAction actionWithTitle:@"" image:nil identifier:@"retry"
-+			handler:^(__unused UIAction* action) {
-+			_retry.hidden = YES;
-+			_bar.hidden = NO;
-+			_line.text = @"0 A.D.";
-+			again();
-+		}] forControlEvents:UIControlEventTouchUpInside];
++		[_again release];
++		_again = [again retain];
 +		_retry.hidden = NO;
 +	});
++	[again release];
++}
++
++- (void)retryTapped
++{
++	_retry.hidden = YES;
++	_bar.hidden = NO;
++	_line.text = @"0 A.D.";
++	if (_again)
++		_again();
 +}
 +
 +- (void)hide
 +{
 +	dispatch_async(dispatch_get_main_queue(), ^{
++		[_again release];
++		_again = nil;
 +		_window.hidden = YES;
 +		_window.rootViewController = nil;
 +		[_window release];
@@ -923,6 +931,18 @@ downloaded.
 +	Progress progress;
 +	std::vector<FileJob> jobs;
 +	jobs.reserve(entries.size());
++	// Every exit below the open() has to come through here. The retry button
++	// calls this function again in the same process, so a descriptor left behind
++	// is left behind once per tap.
++	const auto CloseAll = [&jobs]
++	{
++		for (FileJob& job : jobs)
++			if (job.fd >= 0)
++			{
++				close(job.fd);
++				job.fd = -1;
++			}
++	};
 +	for (Entry& entry : entries)
 +	{
 +		FileJob job;
@@ -935,12 +955,17 @@ downloaded.
 +		if (slash != std::string::npos && !MakeDirs(job.target.substr(0, slash)))
 +		{
 +			error = "cannot create " + entry.path;
++			CloseAll();
 +			return false;
 +		}
 +		job.fd = open(job.target.c_str(), O_RDWR | O_CREAT, 0644);
 +		if (job.fd < 0 || ftruncate(job.fd, entry.size) != 0)
 +		{
++			// The message first: close() may overwrite the errno strerror reads.
 +			error = "cannot write " + entry.path + " (" + std::strerror(errno) + ")";
++			if (job.fd >= 0)
++				close(job.fd);
++			CloseAll();
 +			return false;
 +		}
 +		ReadState(job);
@@ -960,6 +985,7 @@ downloaded.
 +			"%lld MB are needed and %lld MB are free. Make room and try again.",
 +			(missing + SPARE) / (1024 * 1024), available / (1024 * 1024));
 +		error = text;
++		CloseAll();
 +		return false;
 +	}
 +	Note(@"%lld MB to fetch, %lld MB free", missing / (1024 * 1024),
@@ -985,8 +1011,15 @@ downloaded.
 +			}
 +			ok = AllDone(job);
 +		}
++		else if (AllDone(job))
++			ok = true;	// a previous run already fetched it chunk by chunk
 +		else
++		{
++			// FetchWholeSources fetches whole parts, so it counts bytes that a
++			// previous run has already added to progress.done.
++			progress.done -= DoneBytes(job);
 +			ok = FetchWholeSources(session, job, progress);
++		}
 +
 +		if (job.fd >= 0)
 +		{
@@ -1005,13 +1038,17 @@ downloaded.
 +			// Something changed under us, or a chunk arrived wrong and said it
 +			// was right. Throw the file away so that trying again starts over
 +			// instead of hashing the same bad bytes.
-+			unlink(job.target.c_str());
++			//
++			// The state file goes first, and that order is the whole point: a
++			// process killed between the two unlinks must not leave a state file
++			// saying "all there" with no file behind it. That state would be
++			// believed, and the next attempt would hash a hole.
 +			unlink(job.statePath.c_str());
++			unlink(job.target.c_str());
 +			error = job.entry.path + " arrived damaged (checksum)";
 +			ok = false;
 +			break;
 +		}
-+		unlink(job.statePath.c_str());
 +		Note(@"%s: complete and verified", job.entry.path.c_str());
 +	}
 +
@@ -1030,6 +1067,13 @@ downloaded.
 +		error = "the data could not be moved into place";
 +		return false;
 +	}
++	// And only now are the state files safe to drop. Until the rename, each one
++	// is the only record that its file is complete: nothing else in the tree says
++	// so, and deleting them a file at a time would mean that a download which
++	// fails on the last and largest file starts the first ones over on the next
++	// attempt -- every attempt, for ever.
++	for (const FileJob& job : jobs)
++		unlink((final + "/" + job.entry.path + ".parts").c_str());
 +	Note(@"data complete in %s", final.c_str());
 +	return true;
 +}
@@ -1050,8 +1094,14 @@ downloaded.
 +			if (ok)
 +			{
 +				[g_Screen hide];
++				// One turn later, so that -hide (which hops onto this queue
++				// itself) has actually run: this window sits a level above
++				// normal, which is where SDL's window will be.
 +				if (g_WhenReady)
-+					g_WhenReady();
++				{
++					const std::function<void()> ready = g_WhenReady;
++					dispatch_async(dispatch_get_main_queue(), ^{ ready(); });
++				}
 +			}
 +			else
 +				[g_Screen showError:message retry:^{ StartAttempt(); }];
