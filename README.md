@@ -368,12 +368,19 @@ An iPhone. Everything about the device build is checked statically -- that not
 one simulator slice is in the link, that the plist says iPhoneOS -- and nothing
 about it is checked by running it.
 
+**Is it audible?** A device opens, which is not the same as samples reaching it,
+and a simulator cannot be listened to -- `simctl io recordVideo` records no audio.
+So a fourth arm asks openal-soft to write what it mixes into a file instead of
+handing it to CoreAudio (`drivers = wave`, the config handed over through
+`SIMCTL_CHILD_ALSOFT_CONF`). Same engine calls, same decoders, same mixer; only
+the last hop differs, and the RIFF header is never finalised because the app is
+killed, so the check reads the raw samples past every possible header rather than
+trusting a length field. What it cannot answer is whether a speaker moves.
+
 Unanswered either way: multiplayer (no classic Bluetooth, and UDP broadcast
-discovery needs Apple's multicast entitlement), whether anything is actually
-*audible* (a device opens, which is not the same as samples reaching it), and
-whether an interface designed for a mouse can be worked with fingers -- the match
-above does not touch the touch patches, because nothing injects touches into a
-simulator.
+discovery needs Apple's multicast entitlement), and whether an interface designed
+for a mouse can be worked with fingers -- the match above does not touch the touch
+patches, because nothing injects touches into a simulator.
 
 Collada stays out (patch 0020): it is a second shared library loaded at runtime,
 which an `.ipa` cannot carry, and it only matters for loading *unbaked* meshes --

@@ -327,6 +327,88 @@ jobs:
           [ "$LETZTE" -gt "$ERSTE" ]
           test -z "$ECHT"
 
+      # Whether anything is *audible* has been the open question about the sound
+      # since the day a device opened: `Sound Card: CoreAudio Default` says that
+      # openal-soft found an output, not that one non-silent sample ever reached
+      # it. The simulator cannot be listened to -- `simctl io recordVideo` records
+      # no audio -- but openal-soft can be told to write what it mixes into a file
+      # instead of handing it to CoreAudio. Same engine calls, same decoders, same
+      # mixer; only the last hop differs. What that cannot answer is whether a
+      # speaker would move, which needs a phone.
+      - name: Is there a sound in it
+        run: |
+          set -x
+          DEV=""
+          for name in "iPhone 16" "iPhone 15" "iPhone 14"; do
+              DEV=$(xcrun simctl create zeroad-ton "$name" 2>/dev/null) && break
+              DEV=""
+          done
+          test -n "$DEV"
+          xcrun simctl boot "$DEV"
+          xcrun simctl bootstatus "$DEV" -b
+          xcrun simctl install "$DEV" "$PWD/build/pyrogenesis.app"
+          rm -f ~/Library/Logs/DiagnosticReports/pyrogenesis*
+          CONTAINER=$(xcrun simctl get_app_container "$DEV" org.smatkovi.zeroad data)
+          mkdir -p "$CONTAINER/Documents" out-ton
+          # An app in the simulator sees the host's paths, so one absolute path
+          # works on both sides. int16, because the wave writer follows the mixer's
+          # sample type and reading float32 back would be needless work.
+          {
+              echo "[general]"
+              echo "drivers = wave"
+              echo "sample-type = int16"
+              echo "[wave]"
+              echo "file = $CONTAINER/Documents/ton.wav"
+              echo "format = wav"
+          } > "$CONTAINER/Documents/alsoft.conf"
+          START=$(date +%s)
+          SIMCTL_CHILD_ALSOFT_CONF="$CONTAINER/Documents/alsoft.conf" \
+          SIMCTL_CHILD_ALSOFT_LOGLEVEL=3 \
+          SIMCTL_CHILD_ALSOFT_LOGFILE="$CONTAINER/Documents/openal.log" \
+              xcrun simctl launch "$DEV" org.smatkovi.zeroad
+          # The menu's music starts once the GUI stands, which the first arm puts
+          # at well under a minute; three minutes is room to spare.
+          set +x
+          while [ "$(date +%s)" -lt $((START + 180)) ]; do sleep 10; done
+          set -x
+          ls -la "$CONTAINER/Documents" || true
+          cp "$CONTAINER/Documents/ton.wav" out-ton/ 2>/dev/null || true
+          cp "$CONTAINER/Documents/openal.log" out-ton/ 2>/dev/null || true
+          cp "$CONTAINER/Documents/ios-frames.txt" out-ton/ 2>/dev/null || true
+          cp -R "$CONTAINER/Library/Application Support/0ad/logs" out-ton/logs || true
+          cp ~/Library/Logs/DiagnosticReports/pyrogenesis* out-ton/ 2>/dev/null || true
+          xcrun simctl shutdown "$DEV" || true
+
+      - name: Was it silence
+        if: always()
+        run: |
+          echo "--- was openal-soft gesagt hat"
+          tail -30 out-ton/openal.log 2>/dev/null || echo "(kein Protokoll)"
+          echo "--- die Tonspur"
+          ls -l out-ton/ton.wav 2>/dev/null || echo "(keine Datei -- der wave-Ruecken hat nicht aufgemacht)"
+          grep -E "^Sound" out-ton/logs/system_info.txt 2>/dev/null || true
+          # Der Kopf der Datei wird erst beim Schliessen des Geraets richtig
+          # gestellt, und die App wird abgeschossen -- also nicht das wave-Modul,
+          # das der Laengenangabe glauben wuerde, sondern die Rohdaten hinter
+          # jedem moeglichen Kopf.
+          python3 - <<'PY'
+          import array, os, sys
+          pfad = "out-ton/ton.wav"
+          if not os.path.exists(pfad):
+              print("keine Datei"); sys.exit(1)
+          rohdaten = open(pfad, "rb").read()
+          print(f"{len(rohdaten)} Bytes")
+          koerper = rohdaten[128:]
+          werte = array.array("h")
+          werte.frombytes(koerper[:len(koerper) // 2 * 2])
+          spitze = max((abs(w) for w in werte), default=0)
+          laut = sum(1 for w in werte if abs(w) > 32)
+          print(f"Spitze {spitze} von 32767, {laut} von {len(werte)} Abtastwerten ueber dem Rauschen")
+          # 48 kHz stereo: eine Sekunde sind 96000 Werte. Unter einer Zehntel-
+          # sekunde Ton waere ein Knacken und keine Musik.
+          sys.exit(0 if spitze > 100 and laut > 9600 else 1)
+          PY
+
       # The other shape of this port: nothing in the bundle, the app fetches the
       # data itself (patch 0029). Tested with the manifest that cuts the base mod
       # into 8 MiB parts -- 93 MB instead of 3.5 GB -- because what needs testing
@@ -432,6 +514,7 @@ jobs:
             out
             out-laden
             out-partie
+            out-ton
             simulator*.png
             laden*.png
             partie-*.png
