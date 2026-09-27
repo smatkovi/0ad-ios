@@ -1,0 +1,72 @@
+# Republish the game data as single files, once per 0 A.D. version.
+#
+# The app bundle carries no data (see tools/make-data-release.sh for why the
+# upstream tar.xz is unusable on a phone). This runs by hand, not on push: it
+# moves 1.4 GB and the result is the same every time for a given version.
+#
+# Afterwards the manifest it printed belongs in the repository as
+# data/download.manifest -- that is the copy the app ships with, so the hashes
+# are pinned at build time. It is also uploaded as an artifact here.
+name: Data release
+run-name: "Spieldaten ${{ inputs.version }} veroeffentlichen"
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "0 A.D. version"
+        default: "0.28.0"
+      dry_run:
+        description: "nur rechnen, nichts hochladen"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: aria2 (acht Verbindungen statt einer)
+        run: sudo apt-get -qq update && sudo apt-get -qq install -y aria2
+
+      - name: Platz vorher
+        run: df -h /
+
+      - name: Daten holen, hashen, hochladen
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VER: ${{ inputs.version }}
+          NO_UPLOAD: ${{ inputs.dry_run && '1' || '' }}
+          REPO: ${{ github.repository }}
+          WORK: ${{ runner.temp }}/data-release
+        run: tools/make-data-release.sh | tee "$RUNNER_TEMP/release.log"
+
+      - name: Manifest in die Zusammenfassung
+        if: always()
+        run: |
+          MANIFEST="$RUNNER_TEMP/data-release/assets/download.manifest"
+          if [ -e "$MANIFEST" ]; then
+              {
+                  echo "## download.manifest"
+                  echo
+                  echo '```'
+                  cat "$MANIFEST"
+                  echo '```'
+              } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: download-manifest
+          path: ${{ runner.temp }}/data-release/assets/download.manifest
+          if-no-files-found: warn
+
+      - name: Platz nachher
+        if: always()
+        run: df -h /
