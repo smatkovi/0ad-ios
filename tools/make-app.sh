@@ -99,9 +99,22 @@ fi
 # appear in the Files app on the phone itself is
 # LSSupportsOpeningDocumentsInPlace. With one of the two, reading the frame notes
 # needs a Mac -- which rather defeats the point of writing them.
+#
+# NSLocalNetworkUsageDescription comes with the multiplayer arm. Between two
+# simulator devices the address is 127.0.0.1, and loopback is the one address
+# exempt from the local network privacy gate -- which is exactly why the test
+# can run without it. Between two phones it is not: since iOS 14 the first
+# outbound connection to a local address raises a prompt, and without this
+# string there is no prompt to raise and the connection is simply denied. The
+# host needs it as much as the joiner, because both ends connect (0 A.D. hands
+# the host its own client at 127.0.0.1, but the *guest* reaches it over the
+# LAN). No NSBonjourServices: 0 A.D. has no discovery at all -- no Bonjour, no
+# broadcast, no LAN game list -- so an address has to be typed in or passed on
+# the command line either way.
 if [ "$PLATFORM" = iphoneos ]; then
     SHARING='	<key>UIFileSharingEnabled</key><true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key><true/>
+	<key>NSLocalNetworkUsageDescription</key><string>0 A.D. needs the local network to join or host a multiplayer match on another device.</string>
 	<key>UIRequiredDeviceCapabilities</key><array><string>arm64</string></array>'
 else
     SHARING=""

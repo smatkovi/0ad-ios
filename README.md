@@ -507,7 +507,9 @@ about it is checked by running it.
 
 Unanswered either way: whether a *speaker* moves, which is the one hop past the
 mix the wave writer proves; whether multiplayer works between two *phones*, where
-the address is no longer loopback and the Local Network permission does apply;
+the address is no longer loopback and the Local Network permission does apply --
+the phone's plist now carries `NSLocalNetworkUsageDescription`, because without
+that string there is no prompt to raise and the connection is simply denied;
 and whether an interface designed for a mouse can be worked with fingers -- the match above does not touch the touch patches, because
 nothing injects touches into a simulator.
 
