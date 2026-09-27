@@ -39,8 +39,9 @@ REPO=${REPO:-smatkovi/0ad-ios}
 WORK=${WORK:-${TMPDIR:-/tmp}/0ad-data-release}
 BASE=${BASE:-https://github.com/$REPO/releases/download/$TAG}
 # 1792 MiB: under the 2 GiB an asset may have, and a whole number of the 8 MiB
-# chunks the app fetches.
-PART=$((1792 * 1024 * 1024))
+# chunks the app fetches. Overridable so the split can be tried out on something
+# smaller than 3.5 GB.
+PART=${PART:-$((1792 * 1024 * 1024))}
 ARCHIVE="$WORK/0ad-$VER-unix-data.tar.xz"
 URL="https://releases.wildfiregames.com/0ad-$VER-unix-data.tar.xz"
 
@@ -94,7 +95,9 @@ find config mods -type f | LC_ALL=C sort | while read -r rel; do
             "$rel" "$size" "$hash" "$BASE" "$asset" "$size" >> "$MANIFEST"
     else
         echo "### $rel wird geteilt ($((size / 1048576)) MiB)"
-        split -b "$PART" -d -a 2 "$rel" "$WORK/assets/$asset.part"
+        # -a 2 ohne -d: Buchstabensuffixe kennt auch busybox, und aa, ab, ac
+        # sortieren wie 00, 01, 02.
+        split -b "$PART" -a 2 "$rel" "$WORK/assets/$asset.part"
         offset=0
         for part in "$WORK/assets/$asset.part"*; do
             length=$(wc -c < "$part" | tr -d ' ')
@@ -105,8 +108,36 @@ find config mods -type f | LC_ALL=C sort | while read -r rel; do
     fi
 done
 
+# Two more manifests, for the simulator test -- 93 MB instead of 3.5 GB.
+#
+#   .small   config and the base mod, each in one piece. Enough for the engine to
+#            come up with `-mod=mod` and show the mod-selection screen.
+#   .parts   the same, but with mod.zip cut into 8 MiB pieces: twelve parts
+#            instead of public.zip's two, and the offset arithmetic the app does
+#            is the same one. That is the part worth testing, and testing it with
+#            3.5 GB in CI would be silly.
+TEST_PART=$((8 * 1024 * 1024))
+grep -v '^mods/public/' "$MANIFEST" > "$WORK/assets/download.manifest.small"
+
+split -b "$TEST_PART" -a 2 mods/mod/mod.zip "$WORK/assets/test--mod.zip.part"
+{
+    grep '^#' "$MANIFEST"
+    grep '^config/' "$MANIFEST"
+    size=$(wc -c < mods/mod/mod.zip | tr -d ' ')
+    hash=$(sha256sum mods/mod/mod.zip | cut -d' ' -f1)
+    offset=0
+    for part in "$WORK/assets/test--mod.zip.part"*; do
+        length=$(wc -c < "$part" | tr -d ' ')
+        printf 'mods/mod/mod.zip\t%s\t%s\t%s/%s\t%s\t%s\n' "$size" "$hash" \
+            "$BASE" "$(basename "$part")" "$offset" "$length"
+        offset=$((offset + length))
+    done
+} > "$WORK/assets/download.manifest.parts"
+
 echo "### Manifest"
 cat "$MANIFEST"
+echo "### Manifest fuer den Test (geteilt)"
+cat "$WORK/assets/download.manifest.parts"
 echo "### Summe"
 # Each file once, however many parts it has.
 awk -F'\t' '/^[^#]/ && !seen[$1]++ {n++; s+=$2} END {printf "%d Dateien, %.1f GB\n", n, s/1073741824}' "$MANIFEST"
