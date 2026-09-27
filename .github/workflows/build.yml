@@ -54,8 +54,8 @@ jobs:
             ext/0ad-0.28.0/libraries/macos
             ext/0ad-0.28.0/libraries/source/spidermonkey/lib
             ext/0ad-0.28.0/libraries/source/spidermonkey/include-release
-          key: deps-iphonesimulator-0.28.0-v2
-          restore-keys: deps-iphonesimulator-0.28.0-v2-
+          key: deps-iphonesimulator-0.28.0-v3
+          restore-keys: deps-iphonesimulator-0.28.0-v3-
 
       - name: Fetch and patch the source
         run: tools/get-source.sh
@@ -74,7 +74,7 @@ jobs:
             ext/0ad-0.28.0/libraries/macos
             ext/0ad-0.28.0/libraries/source/spidermonkey/lib
             ext/0ad-0.28.0/libraries/source/spidermonkey/include-release
-          key: deps-iphonesimulator-0.28.0-v2-${{ github.run_id }}
+          key: deps-iphonesimulator-0.28.0-v3-${{ github.run_id }}
 
       - name: Build pyrogenesis
         run: |
@@ -183,6 +183,14 @@ jobs:
         run: |
           echo "--- system_info.txt"
           cat "out/logs/system_info.txt" 2>/dev/null || echo "(keine -- so weit kam es nicht)"
+          # Reported, never gated: whether openal-soft's CoreAudio backend opens
+          # a device in a headless simulator is the open question of the sound,
+          # and a missing device is harmless at runtime (SoundManager logs a
+          # warning and stays null). system_info.txt says which of the three
+          # states happened.
+          echo "--- Ton:"
+          grep -E "^Sound" out/logs/system_info.txt 2>/dev/null \
+              || echo "(keine Tonzeile -- so weit kam es nicht)"
           echo "--- mainlog"
           sed -e 's/<[^>]*>//g' out/logs/mainlog.html 2>/dev/null | tail -60 || true
           echo "--- Absturzbericht?"

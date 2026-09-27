@@ -66,11 +66,22 @@ ICU_CROSS_BUILD, LIBSODIUM_SKIP_TESTS, CMAKE_FLAGS. What had to be added:
   iOS flags stripped: it is a host tool, and the ARCHLESS_* variables still carry
   -isysroot and -target.
 
-* **Ten libraries are skipped**, and not because they fail: each is switched off
-  in the engine anyway. wxWidgets is Atlas, gmp/nettle/gnutls/gloox are the
-  multiplayer lobby, ogg/vorbis/openal are the sound, MoltenVK would be a
-  Vulkan backend that needs a renderer port of its own. `ios_skip` says so per
-  library instead of silently doing nothing.
+* **Seven libraries are skipped**, and not because they fail: each is switched
+  off in the engine anyway. wxWidgets is Atlas, gmp/nettle/gnutls/gloox are the
+  multiplayer lobby, MoltenVK would be a Vulkan backend that needs a renderer
+  port of its own. `ios_skip` says so per library instead of silently doing
+  nothing.
+
+* **The sound is built**: libogg, libvorbis and openal-soft. Three details come
+  with it. libogg's CTest executables are no use in a cross build, so
+  BUILD_TESTING goes off there (iOS only -- the macOS build is upstream's).
+  libvorbis finds libogg through find_path/find_library, which the iOS
+  toolchain file confines to the SDK with CMAKE_FIND_ROOT_PATH_MODE_*=ONLY, so
+  OGG_INCLUDE_DIR and OGG_LIBRARY are named outright instead of relying on
+  CMAKE_PREFIX_PATH. And openal-soft gets ALSOFT_REQUIRE_COREAUDIO=ON, which
+  turns "a library with no backend" into a build failure -- deliberately: it
+  sits before fmt and premake, so an SDK without AudioUnit headers stops the
+  dependency run there rather than shipping a game that is silently mute.
 
 The prefix stays libraries/macos, because premake hardcodes it (libraries_dir,
 plus the boost and iconv paths). An iOS build therefore overwrites a macOS one
@@ -161,14 +172,15 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  
  JOBS=${JOBS:="-j2"}
  
-@@ -150,6 +205,17 @@
+@@ -150,6 +205,18 @@
  	echo "Skipping - already built (use --force-rebuild to override)"
  }
  
 +# Libraries that an iOS build does not want. Not "does not work": each of them
 +# is switched off in the engine anyway -- wxWidgets is Atlas, gmp/nettle/gnutls
-+# /gloox are the multiplayer lobby, ogg/vorbis/openal are the sound, and
-+# MoltenVK would be the Vulkan backend, which needs a renderer port of its own.
++# /gloox are the multiplayer lobby, and MoltenVK would be the Vulkan backend,
++# which needs a renderer port of its own. (The sound used to be on this list;
++# openal-soft has a real CoreAudio backend for iOS, so it is not any more.)
 +ios_skip()
 +{
 +	[ "$IOS" = "true" ] || return 1
@@ -179,7 +191,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  # Check that we're actually on macOS
  if [ "$(uname -s)" != "Darwin" ]; then
  	die "This script is intended for macOS only"
-@@ -398,10 +464,23 @@
+@@ -398,10 +465,23 @@
  
  		(
  			cd $LIB_DIRECTORY || die
@@ -204,7 +216,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  				CFLAGS="$CFLAGS" \
  				CXXFLAGS="$CXXFLAGS" \
  				LDFLAGS="$LDFLAGS -L${ICONV_DIR}/lib" \
-@@ -413,6 +492,7 @@
+@@ -413,6 +493,7 @@
  				--enable-shared=no || die
  			make "${JOBS}" || die
  			make install || die
@@ -212,7 +224,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  		) || die "SDL2 build failed"
  
  		cp -f lib/pkgconfig/* "$PC_PATH"
-@@ -445,6 +525,15 @@
+@@ -445,6 +526,15 @@
  
  		(
  			cd $LIB_DIRECTORY || die
@@ -228,7 +240,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  			# Can't use macosx-version, see above comment.
  			./bootstrap.sh \
  				--with-libraries=filesystem,system \
-@@ -461,6 +550,7 @@
+@@ -461,6 +551,7 @@
  				threading=multi \
  				variant=release \
  				install || die
@@ -236,7 +248,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  		) || die "Boost build failed"
  
  		echo "$LIB_VERSION" >.already-built
-@@ -474,6 +564,7 @@
+@@ -474,6 +565,7 @@
  echo "Building wxWidgets..."
  
  (
@@ -244,7 +256,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  	LIB_VERSION="${WXWIDGETS_VERSION}"
  	LIB_ARCHIVE="$LIB_VERSION.tar.bz2"
  	LIB_DIRECTORY="$LIB_VERSION"
-@@ -523,7 +614,7 @@
+@@ -523,7 +615,7 @@
  			../configure \
  				CFLAGS="$ARCHLESS_CFLAGS" \
  				CXXFLAGS="$ARCHLESS_CXXFLAGS" \
@@ -253,7 +265,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  				LDFLAGS="$ARCHLESS_LDFLAGS" $CONF_OPTS || die
  			make "${JOBS}" || die
  			make install || die
-@@ -561,7 +652,7 @@
+@@ -561,7 +653,7 @@
  			# libpng has no flags for zlib but the 10.12 version is too old, so link our own.
  			./configure \
  				CFLAGS="$CFLAGS" \
@@ -262,23 +274,53 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  				LDFLAGS="$LDFLAGS -L$ZLIB_DIR/lib" \
  				"$HOST_PLATFORM" \
  				--prefix="$INSTALL_DIR" \
-@@ -626,6 +717,7 @@
+@@ -642,6 +734,14 @@
+ 		tar -xf $LIB_ARCHIVE || die
  
- OGG_DIR="$(pwd)/libogg"
- (
-+	if ios_skip libogg; then exit 0; fi
- 	LIB_VERSION="${OGG_VERSION}"
- 	LIB_ARCHIVE="$LIB_VERSION.tar.gz"
- 	LIB_DIRECTORY="$LIB_VERSION"
-@@ -664,6 +756,7 @@
- echo "Building libvorbis..."
+ 		# shellcheck disable=SC2086
++		# libogg pulls in CTest and builds two test executables, which are
++		# of no use in a cross build and cannot be run anyway. iOS only: the
++		# macOS build is upstream's and stays as it is.
++		OGG_TESTS=""
++		if [ "$IOS" = "true" ]; then
++			OGG_TESTS="-DBUILD_TESTING=OFF"
++		fi
++		# shellcheck disable=SC2086
+ 		cmake -B libogg \
+ 			-S $LIB_DIRECTORY \
+ 			-G "Unix Makefiles" \
+@@ -650,6 +750,7 @@
+ 			-DBUILD_SHARED_LIBS=OFF \
+ 			-DINSTALL_DOCS=OFF \
+ 			-DCMAKE_C_FLAGS="$CFLAGS" \
++			$OGG_TESTS \
+ 			$CMAKE_FLAGS || die
+ 		cmake --build libogg "${JOBS}" --target install || die
  
- (
-+	if ios_skip libvorbis; then exit 0; fi
- 	LIB_VERSION="${VORBIS_VERSION}"
- 	LIB_ARCHIVE="$LIB_VERSION.tar.gz"
- 	LIB_DIRECTORY="$LIB_VERSION"
-@@ -706,6 +799,7 @@
+@@ -682,11 +783,21 @@
+ 		tar -xf $LIB_ARCHIVE || die
+ 
+ 		# shellcheck disable=SC2086
++		# CMAKE_PREFIX_PATH is not enough when cross compiling: the iOS
++		# toolchain file sets CMAKE_FIND_ROOT_PATH_MODE_{LIBRARY,INCLUDE} to
++		# ONLY, and vorbis' FindOgg.cmake searches with find_path/find_library,
++		# which then never look outside the SDK. Naming the two results
++		# directly is the deterministic way; the macOS path keeps the prefix.
++		OGG_FOR_VORBIS="-DCMAKE_PREFIX_PATH=$OGG_DIR"
++		if [ "$IOS" = "true" ]; then
++			OGG_FOR_VORBIS="-DOGG_INCLUDE_DIR=$OGG_DIR/include -DOGG_LIBRARY=$OGG_DIR/lib/libogg.a"
++		fi
++		# shellcheck disable=SC2086
+ 		cmake -B libvorbis \
+ 			-S $LIB_DIRECTORY \
+ 			-G "Unix Makefiles" \
+ 			-DCMAKE_INSTALL_PREFIX="$INSTALL_DIR" \
+-			-DCMAKE_PREFIX_PATH="$OGG_DIR" \
++			$OGG_FOR_VORBIS \
+ 			-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+ 			-DBUILD_SHARED_LIBS=OFF \
+ 			-DINSTALL_DOCS=OFF \
+@@ -706,6 +817,7 @@
  
  GMP_DIR="$(pwd)/gmp"
  (
@@ -286,7 +328,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  	LIB_VERSION="${GMP_VERSION}"
  	LIB_ARCHIVE="$LIB_VERSION.tar.bz2"
  	LIB_DIRECTORY="$LIB_VERSION"
-@@ -753,6 +847,7 @@
+@@ -753,6 +865,7 @@
  
  NETTLE_DIR="$(pwd)/nettle"
  (
@@ -294,7 +336,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  	LIB_VERSION="${NETTLE_VERSION}"
  	LIB_ARCHIVE="$LIB_VERSION.tar.gz"
  	LIB_DIRECTORY="$LIB_VERSION"
-@@ -803,6 +898,7 @@
+@@ -803,6 +916,7 @@
  
  GNUTLS_DIR="$(pwd)/gnutls"
  (
@@ -302,7 +344,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  	LIB_VERSION="${GNUTLS_VERSION}"
  	LIB_ARCHIVE="$LIB_VERSION.tar.xz"
  	LIB_DIRECTORY="$LIB_VERSION"
-@@ -868,6 +964,7 @@
+@@ -868,6 +982,7 @@
  echo "Building gloox..."
  
  (
@@ -310,7 +352,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  	LIB_VERSION="${GLOOX_VERSION}"
  	LIB_ARCHIVE="$LIB_VERSION.tar.bz2"
  	LIB_DIRECTORY="$LIB_VERSION"
-@@ -949,7 +1046,22 @@
+@@ -949,7 +1064,22 @@
  			else
  				cd $LIB_DIRECTORY/source/build
  			fi
@@ -334,7 +376,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  				../runConfigureICU MacOSX \
  				--prefix="$INSTALL_DIR" \
  				--disable-shared \
-@@ -961,6 +1073,16 @@
+@@ -961,6 +1091,16 @@
  			make "${JOBS}" || die
  			if [ "$ICU_CROSS_BUILD" = "true" ]; then
  				cd ../build || die
@@ -351,7 +393,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  				CFLAGS="$CFLAGS" CXXFLAGS="$CXXFLAGS" LDFLAGS="$LDFLAGS" \
  					../runConfigureICU MacOSX \
  					"$HOST_PLATFORM" \
-@@ -969,9 +1091,7 @@
+@@ -969,9 +1109,7 @@
  					--disable-shared \
  					--enable-static \
  					--disable-samples \
@@ -362,7 +404,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  				make "${JOBS}" || die
  			fi
  			make install || die
-@@ -1029,6 +1149,7 @@
+@@ -1029,6 +1167,7 @@
  echo "Building MiniUPnPc..."
  
  (
@@ -370,15 +412,28 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  	LIB_VERSION="${MINIUPNPC_VERSION}"
  	LIB_ARCHIVE="$LIB_VERSION.tar.gz"
  	LIB_DIRECTORY="$LIB_VERSION"
-@@ -1107,6 +1228,7 @@
+@@ -1124,9 +1263,20 @@
+ 		tar -xf $LIB_ARCHIVE || die
  
- echo "Building OpenAL Soft"
- (
-+	if ios_skip OpenAL; then exit 0; fi
- 	LIB_DIRECTORY="openal-soft-$OPENAL_SOFT_VERSION"
- 	LIB_ARCHIVE="$OPENAL_SOFT_VERSION.tar.gz"
- 	LIB_URL="https://github.com/kcat/openal-soft/archive/refs/tags/"
-@@ -1186,6 +1308,7 @@
+ 		# shellcheck disable=SC2086
++		# Insist on the CoreAudio backend rather than accepting a library
++		# with no backend at all: a mute game that looks fine is worse than a
++		# red dependency build. The cost is real -- OpenAL is built before fmt,
++		# cxxtest and premake, so an SDK without AudioUnit headers stops the
++		# whole dependency run here.
++		OPENAL_BACKEND=""
++		if [ "$IOS" = "true" ]; then
++			OPENAL_BACKEND="-DALSOFT_REQUIRE_COREAUDIO=ON"
++		fi
++		# shellcheck disable=SC2086
+ 		cmake -B libopenal-soft \
+ 			-S $LIB_DIRECTORY \
+ 			-DCMAKE_C_FLAGS="$CFLAGS" \
++			$OPENAL_BACKEND \
+ 			-DLIBTYPE=STATIC \
+ 			-DALSOFT_EXAMPLES=OFF \
+ 			-DALSOFT_UTILS=OFF \
+@@ -1186,6 +1336,7 @@
  echo "Building Molten VK..."
  
  (
@@ -386,7 +441,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  	LIB_DIRECTORY="MoltenVK-$MOLTENVK_VERSION"
  	LIB_ARCHIVE="v$MOLTENVK_VERSION.tar.gz"
  	LIB_URL="https://github.com/KhronosGroup/MoltenVK/archive/refs/tags/"
-@@ -1241,6 +1364,14 @@
+@@ -1241,6 +1392,14 @@
  ./../source/cxxtest-4.4/build.sh $build_sh_options || die "cxxtest build failed"
  
  # --------------------------------------------------------------
@@ -401,7 +456,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  # shellcheck disable=SC2086
  ./../source/fcollada/build.sh $build_sh_options || die "FCollada build failed"
  
-@@ -1251,6 +1382,7 @@
+@@ -1251,6 +1410,7 @@
  # --------------------------------------------------------------
  # shellcheck disable=SC2086
  ./../source/spidermonkey/build.sh $build_sh_options || die "SpiderMonkey build failed"
@@ -409,7 +464,7 @@ in the same tree, which is fine for CI and worth knowing about by hand.
  
  # --------------------------------------------------------------------
  # Build tools must be compiled for the build arch, not the target arch.
-@@ -1259,8 +1391,18 @@
+@@ -1259,8 +1419,18 @@
  
  # --------------------------------------------------------------
  # shellcheck disable=SC2086

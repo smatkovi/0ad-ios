@@ -178,7 +178,9 @@ branch looks. Patch 0018 gives it an `IOS_SDK` mode.
 Built: zlib, libcurl, libiconv, libxml2, SDL2 (with the uikit backend), Boost
 (headers), libpng, freetype, ICU, ENet, libsodium, fmt, and SpiderMonkey 128.
 Skipped by name: wxWidgets (Atlas), gmp/nettle/gnutls/gloox (lobby),
-ogg/vorbis/openal (sound), miniupnpc, MoltenVK, FCollada and NVTT.
+miniupnpc, MoltenVK, FCollada and NVTT. The sound -- libogg, libvorbis,
+openal-soft with its CoreAudio backend -- was on that list until it turned out
+that nothing but `--without-audio` was keeping it off.
 
 ### What actually went wrong, in order
 
@@ -211,5 +213,7 @@ The `.app` bundle and `pyrogenesis -mod=mod` in the simulator - the mod
 selection screen needs a few MB instead of 3.5 GB, which makes it the right
 first thing to look at.
 
-Unanswered either way: multiplayer, sound (iOS has no OpenAL to speak of), and
-how a JIT-less SpiderMonkey holds up in a real match.
+Unanswered either way: multiplayer, whether openal-soft's CoreAudio backend
+opens a device in a headless simulator (a missing one is harmless -- the sound
+manager logs a warning and stays null), and how a JIT-less SpiderMonkey holds up
+in a real match.

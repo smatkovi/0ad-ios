@@ -56,7 +56,7 @@ PC="$SRC/libraries/macos/pkgconfig"
 ls "$PC" || true
 missing=
 for pc in sdl2 libxml-2.0 zlib libcurl icu-i18n icu-uc libsodium libpng fmt \
-          freetype2 libenet; do
+          freetype2 libenet openal ogg vorbis vorbisfile; do
     PKG_CONFIG_LIBDIR="$PC" pkg-config --exists "$pc" 2>/dev/null || \
         missing="$missing $pc"
 done

@@ -82,7 +82,7 @@ export PKG_CONFIG_LIBDIR="$SRC/libraries/macos/pkgconfig"
 # undefined symbols much later. So check first and say which ones are missing.
 missing=
 for pc in sdl2 libxml-2.0 zlib libcurl icu-i18n icu-uc libsodium libpng fmt \
-          freetype2 libenet; do
+          freetype2 libenet openal ogg vorbis vorbisfile; do
     pkg-config --exists "$pc" 2>/dev/null || missing="$missing $pc"
 done
 if [ -n "$missing" ]; then
@@ -98,7 +98,7 @@ rm -rf ../workspaces/ios
 "$PREMAKE" --file=premake5.lua --outpath=../workspaces/ios \
     --os=macosx --ios --gles \
     --without-pch --without-lobby --without-atlas --without-tests \
-    --without-audio --without-miniupnpc --without-nvtt --without-dap-interface \
+    --without-miniupnpc --without-nvtt --without-dap-interface \
     gmake
 
 # The trap the Android port ran into does not apply here, and it is worth a
@@ -109,6 +109,15 @@ rm -rf ../workspaces/ios
 # bundled path expects them -- so the probe never runs. (The Debug
 # configuration in the generated makefile does define DEBUG; that is the
 # bundled path's own doing and only concerns config=debug, which is not built.)
+
+# Did the sound reach the link line? The .pc files carry the frameworks in
+# Libs.private and premake turns anything that is not -l/-L into a linkoption,
+# so this is a report, not a gate -- but it is the one place where a silently
+# missing backend would show up before the game is mute.
+echo "### Ton im Bauplan:"
+pkg-config --libs --static openal vorbisfile vorbis ogg 2>&1 | head -2 || true
+grep -o -- "-lopenal[^ ]*\|-framework CoreAudio\|-lvorbisfile" \
+    ../workspaces/ios/pyrogenesis.make | sort -u || echo "(nichts davon in der Makefile)"
 
 echo "### make"
 cd ../workspaces/ios
