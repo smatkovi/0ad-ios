@@ -85,12 +85,21 @@ jobs:
             ext-bench/0ad-0.28.0/libraries/source/fcollada/.already-built
             ext-bench/0ad-0.28.0/libraries/source/nvtt/lib
             ext-bench/0ad-0.28.0/libraries/source/nvtt/.already-built
-            ext-bench/0ad-0.28.0/libraries/source/cxxtest-4.4/.already-built
             ext-bench/0ad-0.28.0/libraries/source/premake-core/bin
             ext-bench/0ad-0.28.0/libraries/source/premake-core/.already-built
             ext-bench/0ad-0.28.0/binaries/system/libMoltenVK.dylib
           key: bench-deps-macos-0.28.0-v1
           restore-keys: bench-deps-macos-0.28.0-v1-
+
+      # Ein wiederhergestellter Stempel ohne seinen Baum ist eine Luege. cxxtest
+      # wird nur ausgepackt, nicht gebaut, also stand in der Zwischenablage die
+      # Marke "schon gebaut" und keine einzige Kopfdatei -- und der Motor
+      # uebersetzt gegen sie: `source/mocks/dlfcn.h` bindet <cxxtest/Mock.h> ein,
+      # und `pyrogenesis` haengt an `mocks_real`. Das hat einen Lauf gekostet, der
+      # bis zum Binden gekommen war. Aus der Liste oben ist der Stempel jetzt
+      # heraus; die alten Zwischenablagen haben ihn noch, deshalb hier loeschen.
+      - name: Den cxxtest-Stempel ohne cxxtest wegwerfen
+        run: rm -f "$SRC/libraries/source/cxxtest-4.4/.already-built"
 
       - name: Build the macOS dependencies
         # Ohne if: der Wiederherstellungs-Schluessel trifft nie exakt, und die
@@ -120,7 +129,6 @@ jobs:
             ext-bench/0ad-0.28.0/libraries/source/fcollada/.already-built
             ext-bench/0ad-0.28.0/libraries/source/nvtt/lib
             ext-bench/0ad-0.28.0/libraries/source/nvtt/.already-built
-            ext-bench/0ad-0.28.0/libraries/source/cxxtest-4.4/.already-built
             ext-bench/0ad-0.28.0/libraries/source/premake-core/bin
             ext-bench/0ad-0.28.0/libraries/source/premake-core/.already-built
             ext-bench/0ad-0.28.0/binaries/system/libMoltenVK.dylib
