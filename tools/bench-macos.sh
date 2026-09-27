@@ -49,7 +49,10 @@ done
 [ -d "$SRC/binaries/data/config" ] || cp -R "$DATA/config" "$SRC/binaries/data/"
 
 # Eine falsche Karte soll Sekunden kosten und nicht Stunden: "arcadia" etwa ist
-# ein Szenario, keine Zufallskarte.
+# ein Szenario, keine Zufallskarte -- und genau die stand hier unten, waehrend
+# diese Pruefung $MAP geprueft hat. Es gibt kein maps/random/arcadia.json; die
+# Aufzeichnung waere nach Stunden Bauzeit an einer Karte gescheitert, die es
+# nicht gibt. Die Pruefung und der Aufruf nennen ab jetzt dieselbe Karte.
 unzip -l "$DATA/mods/public/public.zip" "maps/random/$MAP.json" 2>/dev/null \
     | grep -q "maps/random/$MAP.json" \
     || { echo "FEHLER: Zufallskarte '$MAP' gibt es nicht in public.zip"; exit 1; }
@@ -153,7 +156,7 @@ touch "$OUT/.stamp"
 echo "### Aufzeichnung (${SECONDS_TO_RECORD}s)"
 # endless: no victory condition ends the game early, so the length of the
 # fixture is decided here and not by how the match happens to go.
-"$BIN" -autostart="random/arcadia" -autostart-seed=1 -autostart-aiseed=1 \
+"$BIN" -autostart="random/$MAP" -autostart-seed=1 -autostart-aiseed=1 \
     -autostart-ai=1:petra -autostart-ai=2:petra \
     -autostart-aidiff=1:3 -autostart-aidiff=2:3 \
     -autostart-victory=endless -autostart-nonvisual \

@@ -94,8 +94,13 @@ jobs:
         # SKIP_LIBS: dieser Bau laeuft --without-lobby --without-miniupnpc, also
         # wird keine der fuenf gelinkt -- und ein nicht erreichbares gmplib.org
         # hat den Lauf schon einmal nach 75 s Zeitueberschreitung beendet.
+        # wxWidgets kommt dazu: --without-atlas heisst, dass premake das einzige
+        # Projekt, das es braucht, nicht einmal erzeugt. MoltenVK bleibt drin --
+        # der Vulkan-Ruecken wird immer uebersetzt, und woher seine Kopfdateien
+        # kommen, ist hier nicht nachgemessen; eine halbe Stunde ist das Risiko
+        # eines gescheiterten Baus nach Stunden nicht wert.
         env:
-          SKIP_LIBS: GMP Nettle GnuTLS gloox MiniUPnPc
+          SKIP_LIBS: wxWidgets GMP Nettle GnuTLS gloox MiniUPnPc
         run: |
           set -o pipefail
           ( cd "$SRC/libraries" && sh ./build-macos-libs.sh -j3 ) 2>&1 | tail -n 200
