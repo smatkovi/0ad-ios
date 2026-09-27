@@ -29,7 +29,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - run: brew install ninja autoconf automake libtool
+      # cbindgen: 0 A.D.s eigenes build.sh setzt
+      # MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE=none, also darf mach es sich nicht
+      # selbst holen, und configure bleibt an "Cannot find cbindgen" stehen --
+      # dieselbe Falle wie im iOS-Zweig, nur dass die dort ein Skript loest. Das
+      # Fass ist Sekunden, `cargo install` waeren Minuten.
+      - run: brew install ninja autoconf automake libtool cbindgen
 
       # Free, and it settles a standing contradiction in this repository: the
       # README says the stdout of an app started with simctl goes nowhere, the

@@ -110,6 +110,13 @@ link_tier()
     shasum -a 256 "$TIERS/pyrogenesis-$tier" | tee -a "$OUT/binaries.txt"
 }
 
+# cbindgen erzeugt die C-Kopfdateien der Rust-Teile und laeuft auf dem Wirt.
+# 0 A.D.s build.sh setzt MACH_BUILD_PYTHON_NATIVE_PACKAGE_SOURCE=none, also darf
+# mach es nicht selbst holen: configure bleibt sonst an "Cannot find cbindgen"
+# stehen -- nach dem Wiederherstellen der Abhaengigkeiten und vor jeder Messung.
+# Dieselbe Zeile steht in tools/build-mozjs-ios.sh; in CI ist es ein brew-Fass.
+command -v cbindgen > /dev/null || cargo install cbindgen --locked
+
 build_spidermonkey jit ""
 build_spidermonkey nojit "--disable-jit"
 
