@@ -367,6 +367,58 @@ the wrong flags, or a header path pointing somewhere else:
 Two of these are worth sending upstream: the `StringBuilder.h` include and the
 missing `enet` in the lobby stub's library list.
 
+## Two of them, one match
+
+The README used to file multiplayer under "needs Apple's multicast entitlement".
+It does not, and reading the network code says why: **0 A.D. has no discovery at
+all** -- no broadcast, no multicast, no LAN game list anywhere in
+`source/network` (`CNetServerWorker::Multicast` is a unicast loop over sessions),
+and the only real multicast in the dependency set is miniupnpc's SSDP, which
+`--without-miniupnpc` compiles out. A direct-IP game needs none of it. The lobby
+is dead code here for a different reason: `CNetClient::TryToConnectWithSTUN`
+opens with `ENSURE(g_XmppClient)`, and `--without-lobby` leaves that null.
+
+So the arm is two simulator devices on one runner, one hosting and one joining
+over **127.0.0.1** -- the address a host already hands its own client on every
+platform (`SetupServerData("127.0.0.1", serverPort)`), and the one address exempt
+from the Local Network permission on iOS and macOS alike. Not the runner's en0
+address, and not `localhost`: `enet_address_set_host` is AF_INET only. The server
+binds one UDP socket on `ENET_HOST_ANY`; the joiner binds nothing at all
+(`CreateHost(nullptr, ...)`), so the two cannot collide.
+
+What no document settles is whether two booted simulator devices share the host's
+loopback. They are ordinary macOS process trees, so they should -- and the arm
+measures it rather than assuming it: `lsof -nP -iUDP:20595` from the runner, with
+the seconds until the host listened written to a file.
+
+**What the gate has to distinguish** is not "did two games run" but "was it one
+match", and three things do that work:
+
+* **The matchID.** It is generated exactly once, on the host, from 64 random
+  bits, travels in the `start` message, and `NetClient::OnGameStart` hands the
+  *received* attributes to the replay logger. So the host's random number ends up
+  in a file written by the other process, in the other device's container.
+  Nothing but a join produces that.
+* **The distance between the two turn counters** -- and this is why both
+  processes are stopped with **one `kill -STOP` naming both pids**. The server
+  advances a turn only when every non-observing client is ready, so the two can
+  never be more than `COMMAND_DELAY_MP` = 4 turns apart. Shut the two devices
+  down one after the other instead, and the later one keeps playing; the distance
+  would then measure the script's own latency. A guest that dropped out after
+  forty turns while the host ran on to nine hundred fails this and passes
+  everything else.
+* **Both were still counting at the end**, recorded before and after the last
+  four minutes. Thirty shared turns is six seconds of game time -- the question
+  this arm exists for is whether two software-GLES instances can *sustain* a
+  match on three cores.
+
+Reported but deliberately not gated: turns per second (in lockstep the slower
+side sets the pace, so a rate gate would be a flake generator) and the skew
+between the two frame notes (they fire on each process's own clock every ten
+seconds). And the arm deletes the other arms' simulator devices first: each holds
+a container with the 3.4 GB of game data, and this is where the runner's disk
+gets tight.
+
 ## What the missing JIT costs: 4.6x
 
 Measured rather than guessed, and on macOS, where the question can be asked at
@@ -421,11 +473,10 @@ An iPhone. Everything about the device build is checked statically -- that not
 one simulator slice is in the link, that the plist says iPhoneOS -- and nothing
 about it is checked by running it.
 
-Unanswered either way: multiplayer (no classic Bluetooth, and UDP broadcast
-discovery needs Apple's multicast entitlement); whether a *speaker* moves, which
-is the one hop past the mix the wave writer proves; and whether an interface
-designed for a mouse can be worked with fingers -- the match above does not touch
-the touch patches, because nothing injects touches into a simulator.
+Unanswered either way: whether a *speaker* moves, which is the one hop past the
+mix the wave writer proves; and whether an interface designed for a mouse can be
+worked with fingers -- the match above does not touch the touch patches, because
+nothing injects touches into a simulator.
 
 Collada stays out (patch 0020): it is a second shared library loaded at runtime,
 which an `.ipa` cannot carry, and it only matters for loading *unbaked* meshes --

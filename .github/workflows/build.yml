@@ -492,6 +492,370 @@ jobs:
           test -f out-laden/logs/system_info.txt
           test -z "$ECHT"
 
+      # --- Mehrspieler: zwei Simulatoren, eine Partie ------------------------
+      #
+      # The last big question the README had open. Direct IP only, and that is
+      # not a limitation of this arm but of the build: gloox and gnutls are
+      # skipped, `CNetClient::TryToConnectWithSTUN` opens with
+      # `ENSURE(g_XmppClient)`, and `--without-lobby` leaves that null.
+      #
+      # Three things make it testable at all, and each is a reading of the
+      # source rather than a hope:
+      #
+      # * **There is no discovery anywhere in 0 A.D.'s networking** -- no
+      #   broadcast, no multicast, no LAN game list (`CNetServerWorker::Multicast`
+      #   is a unicast loop over sessions). So nothing here needs Apple's
+      #   multicast entitlement, which is what the README assumed would be in the
+      #   way.
+      # * **127.0.0.1 is the address a host already hands its own client** on
+      #   every platform (`JSInterface_Network.cpp`, `SetupServerData("127.0.0.1",
+      #   port)`), and loopback is the one address exempt from the Local Network
+      #   permission on iOS and on macOS. Not the runner's en0 address, and not
+      #   "localhost": `enet_address_set_host` is AF_INET only.
+      # * The server binds one UDP socket on `ENET_HOST_ANY` and **the joiner
+      #   binds nothing at all** (`CreateHost(nullptr, ...)`), so there is no
+      #   second port to reserve and no way for the two to collide.
+      #
+      # What no document settles is whether two booted simulator devices share
+      # the host's loopback. They are ordinary macOS process trees, so they
+      # should -- and the arm measures it instead of assuming it: `lsof` on UDP
+      # 20595, run from the runner itself.
+      - name: Play against each other
+        run: |
+          set -x
+          # Platz zuerst. Jeder fertige Arm laesst einen Container mit den
+          # 3,4 GB Spieldaten stehen, und hier kommen zwei dazu -- das ist die
+          # Stelle, an der die Platte des Laeufers eng wird. Die Geraete der
+          # anderen Arme sind ausgewertet, ihre Beweise liegen in out*/.
+          df -h /
+          for name in zeroad zeroad-partie zeroad-ton zeroad-laden; do
+              for udid in $(xcrun simctl list devices | sed -nE "s/^[[:space:]]*${name} \(([-0-9A-Fa-f]+)\).*/\1/p"); do
+                  xcrun simctl shutdown "$udid" 2>/dev/null || true
+                  xcrun simctl delete "$udid" || true
+              done
+          done
+          df -h /
+
+          WIRT=""; GAST=""
+          for name in "iPhone 16" "iPhone 15" "iPhone 14"; do
+              WIRT=$(xcrun simctl create zeroad-wirt "$name" 2>/dev/null) || { WIRT=""; continue; }
+              GAST=$(xcrun simctl create zeroad-gast "$name" 2>/dev/null) || { GAST=""; continue; }
+              break
+          done
+          test -n "$WIRT"; test -n "$GAST"
+          xcrun simctl boot "$WIRT"
+          xcrun simctl boot "$GAST"
+          xcrun simctl bootstatus "$WIRT" -b
+          xcrun simctl bootstatus "$GAST" -b
+          xcrun simctl install "$WIRT" "$PWD/build/pyrogenesis.app"
+          xcrun simctl install "$GAST" "$PWD/build/pyrogenesis.app"
+          df -h /
+          rm -f ~/Library/Logs/DiagnosticReports/pyrogenesis*
+          mkdir -p out-mp/wirt out-mp/gast
+          C_WIRT=$(xcrun simctl get_app_container "$WIRT" org.smatkovi.zeroad data)
+          C_GAST=$(xcrun simctl get_app_container "$GAST" org.smatkovi.zeroad data)
+          # Sonst wuerde der Vergleich unten eine Datei mit sich selbst
+          # vergleichen und immer gruen sein.
+          test "$C_WIRT" != "$C_GAST"
+          echo "$WIRT" > out-mp/udid-wirt.txt
+          echo "$GAST" > out-mp/udid-gast.txt
+
+          # **Erst beide Buendel warmlaufen lassen.** Der Wirt haelt seinen
+          # Hauptthread in Autostarts Warteschleife fest, solange der Gast
+          # startet -- und ein *kalter* Start dieses 3,4-GB-Buendels hat in
+          # diesem Projekt schon 169 s gebraucht, bevor der Prozess ueberhaupt
+          # existierte. Minutenlang untaetig und nie aktiviert ist genau der
+          # Zustand, in dem iOS eine App abraeumt. Ein Leerstart pro Geraet
+          # bezahlt die einmaligen Kosten (Signaturpruefung, Seiteneinlagerung);
+          # der echte Start ist danach warm und dauert Sekunden.
+          WARM=$(date +%s)
+          for dev in "$WIRT" "$GAST"; do
+              xcrun simctl launch "$dev" org.smatkovi.zeroad || true
+              xcrun simctl terminate "$dev" org.smatkovi.zeroad || true
+          done
+          echo "Warmlauf beider Buendel: $(($(date +%s) - WARM))s"
+
+          # Der Wirt. Kein Petra auf keiner Seite: cmd_line_args.js legt die KI
+          # auf die Plaetze 0 und 1, *bevor* autostart_host.js die Spielerzahl auf
+          # die Zahl der verbundenen Sitzungen setzt -- die beiden Menschen
+          # landeten dann auf Plaetzen, die schon eine KI hat. Und zwei
+          # Software-GLES-Instanzen auf drei Kernen sind teuer genug.
+          # -autostart=MAP muss daneben stehen: ohne Karte waehlt GameSetup
+          # autostartHost mit networked=false, also ein Einzelspiel, das nichts
+          # anbietet. Verschiedene Spielernamen sind Pflicht, nicht Zierde: der
+          # Server wirft einen gleichen Namen mit NDR_PLAYERNAME_IN_USE hinaus,
+          # und beide Vorgaben sind "anonymous".
+          AUS_WIRT=$(xcrun simctl launch "$WIRT" org.smatkovi.zeroad \
+              -autostart=random/mainland -autostart-size=128 -autostart-players=2 \
+              -autostart-seed=1 -autostart-victory=endless \
+              -autostart-host -autostart-host-players=2 \
+              -autostart-playername=Wirt -autostart-port=20595)
+          echo "$AUS_WIRT"
+          # Die Uhr laeuft ab *hier*, nicht ab vor dem Start: sonst frisst der
+          # Start selbst das Zeitfenster, das der Probe gehoert.
+          START=$(date +%s)
+          PID_WIRT=$(printf '%s' "$AUS_WIRT" | sed -E 's/.*: ([0-9]+).*/\1/')
+
+          # Horcht er? Das ist die eine Annahme, fuer die es keine Apple-Quelle
+          # gibt -- eine App im Simulator ist ein Prozess des Wirtsrechners, also
+          # fragt der Wirtsrechner.
+          HORCHT=""
+          set +x
+          while [ "$(date +%s)" -lt $((START + 420)) ]; do
+              if lsof -nP -iUDP:20595 2>/dev/null | grep -q pyrogenesis; then
+                  HORCHT=$(($(date +%s) - START))
+                  break
+              fi
+              sleep 3
+          done
+          set -x
+          lsof -nP -iUDP:20595 > out-mp/lsof-20595.txt 2>&1 || true
+          echo "${HORCHT:-}" > out-mp/wirt-horcht.txt
+          echo "Wirt horcht nach: ${HORCHT:-(nie in 420 s)}s"
+
+          # Der Gast. Nichts als Adresse, Port und Name: AutoStartClient liest
+          # keine Spieleinstellungen, er bekommt sie im "start"-Paket des Wirts.
+          AUS_GAST=$(xcrun simctl launch "$GAST" org.smatkovi.zeroad \
+              -autostart-client=127.0.0.1 -autostart-port=20595 \
+              -autostart-playername=Gast)
+          echo "$AUS_GAST"
+          START_GAST=$(date +%s)
+          PID_GAST=$(printf '%s' "$AUS_GAST" | sed -E 's/.*: ([0-9]+).*/\1/')
+          echo "Wirt $PID_WIRT / Gast $PID_GAST"
+
+          N_WIRT="$C_WIRT/Documents/ios-frames.txt"
+          N_GAST="$C_GAST/Documents/ios-frames.txt"
+          # Bis *beide* eine Runde haben. Zwei Kartenerzeugungen laufen hier
+          # gleichzeitig, jede in JavaScript ohne JIT -- die 27 s des Einzelspiels
+          # sind die Untergrenze, nicht die Erwartung.
+          BEIDE=""
+          set +x
+          while [ "$(date +%s)" -lt $((START_GAST + 900)) ]; do
+              sleep 10
+              if grep -qE "turn [0-9]+" "$N_WIRT" 2>/dev/null && \
+                 grep -qE "turn [0-9]+" "$N_GAST" 2>/dev/null; then
+                  BEIDE=$(($(date +%s) - START_GAST))
+                  break
+              fi
+          done
+          set -x
+          echo "${BEIDE:-}" > out-mp/erste-runde.txt
+          echo "beide in einer Runde nach: ${BEIDE:-(nie in 900 s)}s"
+          tail -3 "$N_WIRT" 2>/dev/null || echo "(Wirt: keine Notizen)"
+          tail -3 "$N_GAST" 2>/dev/null || echo "(Gast: keine Notizen)"
+
+          # Vier Minuten spielen lassen -- und die Rundenzahlen davor und danach
+          # festhalten. Ohne das beweist die Probe nur, dass die beiden *einmal*
+          # zusammen waren: ein Gast, der nach vierzig Runden wegbricht,
+          # hinterlaesst eine Datei mit steigenden Rundenzahlen und einen Wirt,
+          # der allein weiterlaeuft. Die Frage, fuer die dieser Arm existiert,
+          # ist aber, ob zwei Instanzen auf drei Kernen eine Partie *tragen*.
+          runde_jetzt() { grep -oE "turn [0-9]+" "$1" 2>/dev/null | tail -1 | awk '{print $2}'; }
+          VOR_WIRT=$(runde_jetzt "$N_WIRT"); VOR_GAST=$(runde_jetzt "$N_GAST")
+          SPIEL=$(date +%s)
+          set +x
+          while [ "$(date +%s)" -lt $((SPIEL + 240)) ]; do sleep 10; done
+          set -x
+          NACH_WIRT=$(runde_jetzt "$N_WIRT"); NACH_GAST=$(runde_jetzt "$N_GAST")
+          printf '%s %s %s %s\n' "${VOR_WIRT:-0}" "${NACH_WIRT:-0}" "${VOR_GAST:-0}" "${NACH_GAST:-0}" \
+              > out-mp/weiter.txt
+          cat out-mp/weiter.txt
+          xcrun simctl io "$WIRT" screenshot mp-wirt.png || true
+          xcrun simctl io "$GAST" screenshot mp-gast.png || true
+          for f in mp-wirt.png mp-gast.png; do
+              sips -r 270 "$f" --out "$f" > /dev/null 2>&1 || true
+          done
+          ps -o pid,%cpu,rss -p "$PID_WIRT" > out-mp/last.txt 2>&1 || true
+          ps -o pid,%cpu,rss -p "$PID_GAST" >> out-mp/last.txt 2>&1 || true
+          vm_stat >> out-mp/last.txt 2>&1 || true
+
+          # **Beide im selben Augenblick anhalten.** Ein Signal, zwei Prozesse:
+          # was danach in den Aufzeichnungen steht, ist an derselben Wanduhr
+          # abgelesen. Sonst koennte die spaeter beendete Seite noch Runden
+          # nachlegen, und der Abstand der Rundenzahlen -- die einzige Groesse,
+          # die Gleichschritt von "zwei Partien nebeneinander" unterscheidet --
+          # waere keine Aussage mehr. Keine Fortsetzung danach, die Prozesse
+          # werden mit dem Geraet abgeraeumt.
+          kill -STOP "$PID_WIRT" "$PID_GAST" || true
+
+          einsammeln() {
+              rolle=$1; behaelter=$2; dev=$3
+              cp "$behaelter/Documents/ios-frames.txt" "out-mp/$rolle/" 2>/dev/null || true
+              cp -R "$behaelter/Library/Application Support/0ad/logs" "out-mp/$rolle/logs" 2>/dev/null || true
+              # Die Aufzeichnung ist das Beweisstueck: ihre erste Zeile traegt die
+              # matchID des Wirts, und danach steht jede Runde mit ihrem Abdruck
+              # darin, pro Runde gespuelt.
+              find "$behaelter/Library/Application Support/0ad/replays" \
+                  -name commands.txt -exec cp {} "out-mp/$rolle/commands.txt" \; 2>/dev/null || true
+              xcrun simctl spawn "$dev" log show --last 60m --style compact \
+                  --predicate 'process == "pyrogenesis"' \
+                  > "out-mp/$rolle/system-log.txt" 2>&1 || true
+              ls -la "out-mp/$rolle" || true
+          }
+          einsammeln wirt "$C_WIRT" "$WIRT"
+          einsammeln gast "$C_GAST" "$GAST"
+
+          # Absturzberichte heissen auf beiden Seiten pyrogenesis; zugeordnet
+          # wird ueber die Geraete-Kennung im Pfad des Prozesses im Bericht.
+          for bericht in ~/Library/Logs/DiagnosticReports/pyrogenesis*; do
+              [ -e "$bericht" ] || continue
+              if grep -q "$WIRT" "$bericht"; then cp "$bericht" out-mp/wirt/ || true
+              elif grep -q "$GAST" "$bericht"; then cp "$bericht" out-mp/gast/ || true
+              else cp "$bericht" out-mp/ || true; fi
+          done
+          # Wieder loslaufen lassen, bevor heruntergefahren wird: ein
+          # angehaltener Prozess beantwortet kein SIGTERM, und simctl wartet
+          # sonst je Geraet seine Zeitueberschreitung ab. Die Beweise sind zu
+          # diesem Zeitpunkt laengst kopiert, ein paar Runden mehr aendern
+          # nichts mehr.
+          kill -CONT "$PID_WIRT" "$PID_GAST" || true
+          xcrun simctl shutdown "$WIRT" || true
+          xcrun simctl shutdown "$GAST" || true
+
+      - name: Did they play together
+        if: always()
+        run: |
+          echo "--- horcht der Wirt auf 20595?"
+          cat out-mp/lsof-20595.txt 2>/dev/null | head -5 || echo "(nichts)"
+          echo "--- Notizen Wirt"; tail -6 out-mp/wirt/ios-frames.txt 2>/dev/null || echo "(keine)"
+          echo "--- Notizen Gast"; tail -6 out-mp/gast/ios-frames.txt 2>/dev/null || echo "(keine)"
+          echo "--- was der Wirt ueber Verbindungen sagt"
+          sed -e 's/<[^>]*>//g' out-mp/wirt/logs/mainlog.html 2>/dev/null \
+              | grep -iE "Net server|Net client|connection" | tail -12 || true
+          echo "--- was der Gast sagt"
+          sed -e 's/<[^>]*>//g' out-mp/gast/logs/mainlog.html 2>/dev/null \
+              | grep -iE "Net server|Net client|connection|Disconnect" | tail -12 || true
+          echo "--- Last"; cat out-mp/last.txt 2>/dev/null | head -8 || true
+
+          # Die Beweise muessen *da* sein, bevor irgendetwas ueber sie behauptet
+          # wird. Ein fehlendes oos_dump ist sonst genau so gruen wie keins.
+          test -f out-mp/wirt/ios-frames.txt
+          test -f out-mp/gast/ios-frames.txt
+          test -d out-mp/wirt/logs
+          test -d out-mp/gast/logs
+          test -s out-mp/wirt-horcht.txt
+
+          python3 - <<'PY'
+          import json, os, sys
+
+          def lies(rolle):
+              pfad = "out-mp/%s/commands.txt" % rolle
+              if not os.path.exists(pfad):
+                  return None
+              zeilen = open(pfad, encoding="utf-8", errors="replace").read().split("\n")
+              kopf = {}
+              if zeilen and zeilen[0].startswith("start "):
+                  try:
+                      kopf = json.loads(zeilen[0][6:])
+                  except Exception as e:
+                      print("Kopf von %s unlesbar: %s" % (rolle, e))
+              runden, abdruecke, jetzt = [], {}, None
+              for z in zeilen:
+                  t = z.split()
+                  if not t:
+                      continue
+                  if t[0] == "turn" and len(t) >= 2:
+                      try:
+                          jetzt = int(t[1]); runden.append(jetzt)
+                      except ValueError:
+                          pass
+                  elif t[0] in ("hash", "hash-quick") and len(t) >= 2 and jetzt is not None:
+                      abdruecke[jetzt] = (t[0], t[1])
+              return {"matchID": kopf.get("matchID"), "runden": runden,
+                      "max": max(runden) if runden else 0, "abdruecke": abdruecke}
+
+          w, g = lies("wirt"), lies("gast")
+          for name, d in (("Wirt", w), ("Gast", g)):
+              if d is None:
+                  print("%s: keine Aufzeichnung" % name)
+              else:
+                  print("%s: matchID %s, %d Runden, hoechste %d, %d Abdruecke"
+                        % (name, d["matchID"], len(d["runden"]), d["max"], len(d["abdruecke"])))
+
+          fehler = []
+          if w is None or g is None:
+              fehler.append("eine der beiden Seiten hat keine Aufzeichnung geschrieben")
+          else:
+              # 1. Dieselbe Partie. Die matchID entsteht genau einmal, auf dem
+              #    Wirt, aus 64 Zufallsbits, und reist im "start"-Paket. Dass sie
+              #    in einer Datei steht, die der *andere* Prozess geschrieben hat,
+              #    kann nur ein Beitritt erzeugen.
+              if not w["matchID"] or w["matchID"] != g["matchID"]:
+                  fehler.append("matchID verschieden oder leer: %s / %s" % (w["matchID"], g["matchID"]))
+              # 2. Gleichschritt. Der Server rueckt eine Runde erst vor, wenn jeder
+              #    nicht-zuschauende Client bereit ist, also kann der Abstand
+              #    COMMAND_DELAY_MP nicht ueberschreiten. Beide Prozesse wurden im
+              #    selben Augenblick angehalten, deshalb ist der Abstand eine
+              #    Aussage und keine Messlatenz.
+              abstand = abs(w["max"] - g["max"])
+              print("Abstand der hoechsten Runden: %d (COMMAND_DELAY_MP = 4)" % abstand)
+              if abstand > 4:
+                  fehler.append("Abstand %d > 4: das war kein Gleichschritt" % abstand)
+              # 3. Es wurde wirklich gespielt.
+              if w["max"] < 30 or g["max"] < 30:
+                  fehler.append("zu wenige Runden: %d / %d" % (w["max"], g["max"]))
+              # 4. Und beide haben dasselbe gerechnet. Beweist fuer sich noch kein
+              #    Zusammenspiel -- zwei Einzelpartien mit derselben Saat auch --,
+              #    deshalb steht es hinter der matchID und nicht davor.
+              gemeinsam = sorted(set(w["abdruecke"]) & set(g["abdruecke"]))
+              ungleich = [t for t in gemeinsam if w["abdruecke"][t] != g["abdruecke"][t]]
+              print("gemeinsame Runden mit Abdruck: %d, davon ungleich: %d"
+                    % (len(gemeinsam), len(ungleich)))
+              if len(gemeinsam) < 30:
+                  fehler.append("nur %d gemeinsame Runden mit Abdruck" % len(gemeinsam))
+              if ungleich:
+                  fehler.append("Abdruecke unterscheiden sich in den Runden %s" % ungleich[:10])
+              verschiedene = len(set(w["abdruecke"].values()))
+              print("verschiedene Abdruecke beim Wirt: %d (ohne KI ruehrt sich wenig)" % verschiedene)
+
+          open("out-mp/urteil.txt", "w").write("\n".join(fehler) if fehler else "zusammen gespielt\n")
+          for f in fehler:
+              print("FEHLER: " + f)
+          sys.exit(1 if fehler else 0)
+          PY
+
+          echo "--- liefen beide am Ende noch?"
+          read VW NW VG NG < out-mp/weiter.txt || true
+          echo "Wirt $VW -> $NW, Gast $VG -> $NG (in vier Minuten)"
+          [ "${NW:-0}" -gt "${VW:-0}" ]
+          [ "${NG:-0}" -gt "${VG:-0}" ]
+
+          echo "--- wurde jemand hinausgeworfen?"
+          # Der Abstand oben faengt einen weggebrochenen Gast schon, aber nur als
+          # Zahl. Diese beiden Zeilen sagen, *dass* es eine Trennung war.
+          RAUS_W=$(sed -e 's/<[^>]*>//g' out-mp/wirt/logs/mainlog.html 2>/dev/null \
+              | grep -c "Net server: Disconnected" || true)
+          RAUS_G=$(sed -e 's/<[^>]*>//g' out-mp/gast/logs/mainlog.html 2>/dev/null \
+              | grep -c "Net client: Disconnected" || true)
+          echo "Trennungen: Wirt ${RAUS_W:-0}, Gast ${RAUS_G:-0}"
+          [ "${RAUS_W:-0}" -eq 0 ]
+          [ "${RAUS_G:-0}" -eq 0 ]
+
+          echo "--- der Wirt hat Verbindungen angenommen"
+          # Zwei Zeilen, nicht eine: der Wirt verbindet seinen *eigenen* Client
+          # ueber dasselbe Loopback, also erscheint eine Zeile auch ohne Gast.
+          # Beweis fuer den Gast ist die matchID oben, nicht diese Zahl.
+          ANGENOMMEN=$(sed -e 's/<[^>]*>//g' out-mp/wirt/logs/mainlog.html 2>/dev/null \
+              | grep -c "Received connection from" || true)
+          echo "angenommene Verbindungen: ${ANGENOMMEN:-0}"
+          [ "${ANGENOMMEN:-0}" -ge 2 ]
+
+          echo "--- ist etwas auseinandergelaufen?"
+          ls out-mp/*/logs/oos_dump* 2>/dev/null && { echo "OOS!"; exit 1; } || echo "(kein oos_dump)"
+
+          echo "--- Absturzberichte?"
+          ECHT=$(grep -L XPC_EXIT_REASON_SIGTERM_TIMEOUT out-mp/*/*.ips out-mp/*.ips 2>/dev/null || true)
+          if ls out-mp/*/*.ips out-mp/*.ips > /dev/null 2>&1; then
+              for bericht in out-mp/*/*.ips out-mp/*.ips; do
+                  [ -e "$bericht" ] || continue
+                  tools/symbolicate.py "$bericht" \
+                      "$PWD/build/pyrogenesis.app/pyrogenesis" || head -30 "$bericht"
+              done
+          else
+              echo "(keiner)"
+          fi
+          test -z "$ECHT"
+
       - name: Collect the logs
         if: always()
         run: |
@@ -515,6 +879,8 @@ jobs:
             out-laden
             out-partie
             out-ton
+            out-mp
             simulator*.png
             laden*.png
             partie-*.png
+            mp-*.png
