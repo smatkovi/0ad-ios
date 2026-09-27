@@ -90,6 +90,12 @@ jobs:
       - name: Build the macOS dependencies
         # Ohne if: der Wiederherstellungs-Schluessel trifft nie exakt, und die
         # Stempel in libraries/macos ueberspringen ohnehin, was schon da ist.
+        #
+        # SKIP_LIBS: dieser Bau laeuft --without-lobby --without-miniupnpc, also
+        # wird keine der fuenf gelinkt -- und ein nicht erreichbares gmplib.org
+        # hat den Lauf schon einmal nach 75 s Zeitueberschreitung beendet.
+        env:
+          SKIP_LIBS: GMP Nettle GnuTLS gloox MiniUPnPc
         run: |
           set -o pipefail
           ( cd "$SRC/libraries" && sh ./build-macos-libs.sh -j3 ) 2>&1 | tail -n 200

@@ -218,6 +218,83 @@ jobs:
           # The job reported success twice while the game was dying.
           ! ls out/*.ips > /dev/null 2>&1
 
+      # The other shape of this port: nothing in the bundle, the app fetches the
+      # data itself (patch 0029). Tested with the manifest that cuts the base mod
+      # into 8 MiB parts -- 93 MB instead of 3.5 GB -- because what needs testing
+      # is the offset arithmetic and the return into RunGameOrAtlas, and neither
+      # gets truer at a larger size.
+      #
+      # This is also the only test of the phone's shape of the app that can run
+      # without a phone: the same code path, the same manifest format.
+      - name: Bundle it again, without the data
+        run: |
+          curl -fL --retry 3 -o manifest.parts \
+              "https://github.com/${{ github.repository }}/releases/download/data-0.28.0/download.manifest.parts"
+          cat manifest.parts
+          BUNDLE_ID=org.smatkovi.zeroad.laden MANIFEST="$PWD/manifest.parts" \
+              tools/make-app.sh "$SRC" - "$PWD/build/laden.app"
+
+      - name: Let it fetch the data itself
+        run: |
+          set -x
+          DEV=""
+          for name in "iPhone 16" "iPhone 15" "iPhone 14"; do
+              DEV=$(xcrun simctl create zeroad-laden "$name" 2>/dev/null) && break
+              DEV=""
+          done
+          test -n "$DEV"
+          xcrun simctl boot "$DEV"
+          xcrun simctl bootstatus "$DEV" -b
+          xcrun simctl install "$DEV" "$PWD/build/laden.app"
+          START=$(date +%s)
+          # -mod=mod: this manifest has no public.zip, and the base mod on its own
+          # is the mod-selection screen.
+          xcrun simctl launch "$DEV" org.smatkovi.zeroad.laden -mod=mod
+          CONTAINER=$(xcrun simctl get_app_container "$DEV" org.smatkovi.zeroad.laden data)
+          # Straight away, with a chance of catching the progress bar: 93 MB from
+          # GitHub's CDN is seconds.
+          xcrun simctl io "$DEV" screenshot laden-0s.png || true
+          for seconds in 45 120 240; do
+              while [ "$(date +%s)" -lt $((START + seconds)) ]; do sleep 5; done
+              xcrun simctl io "$DEV" screenshot "laden-${seconds}s.png" || true
+              sips -r 270 "laden-${seconds}s.png" --out "laden-${seconds}s.png" \
+                  > /dev/null 2>&1 || true
+              echo "--- nach ${seconds}s:"
+              cat "$CONTAINER/Documents/ios-frames.txt" 2>/dev/null | tail -8 \
+                  || echo "(noch keine Notizen)"
+          done
+          mkdir -p out-laden
+          cp -R "$CONTAINER/Library/Application Support/0ad/logs" out-laden/logs || true
+          cp "$CONTAINER/Documents/ios-frames.txt" out-laden/ 2>/dev/null || true
+          du -sh "$CONTAINER/Library/Application Support/0ad/data" 2>/dev/null \
+              || echo "(kein heruntergeladenes Datenverzeichnis)"
+          ls -la "$CONTAINER/Library/Application Support/0ad/data/mods/mod" 2>/dev/null || true
+          cp ~/Library/Logs/DiagnosticReports/pyrogenesis* out-laden/ 2>/dev/null || true
+          xcrun simctl shutdown "$DEV" || true
+
+      - name: Did the download work
+        if: always()
+        run: |
+          echo "--- Notizen"
+          cat out-laden/ios-frames.txt 2>/dev/null || echo "(keine)"
+          echo "--- Absturzbericht?"
+          if ls out-laden/*.ips > /dev/null 2>&1; then
+              for report in out-laden/*.ips; do
+                  tools/symbolicate.py "$report" \
+                      "$PWD/build/laden.app/pyrogenesis" || head -40 "$report"
+              done
+          else
+              echo "(keiner)"
+          fi
+          # Every one of these is a different claim: the parts arrived and the
+          # hash of the whole file matched; the directory was renamed, so
+          # RootData() will find it; and the engine came up afterwards, which is
+          # what returning into RunGameOrAtlas has to achieve.
+          grep -q "mods/mod/mod.zip: complete and verified" out-laden/ios-frames.txt
+          grep -q "data complete in" out-laden/ios-frames.txt
+          test -f out-laden/logs/system_info.txt
+          ! ls out-laden/*.ips > /dev/null 2>&1
+
       - name: Collect the logs
         if: always()
         run: |
@@ -238,4 +315,6 @@ jobs:
           name: simulator-build
           path: |
             out
+            out-laden
             simulator*.png
+            laden*.png

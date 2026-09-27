@@ -1,0 +1,148 @@
+name: "Build: iPhone"
+
+# The same build as the simulator one, for the phone: SDK iphoneos, arm64, and
+# an unsigned .ipa at the end.
+#
+# What it cannot do is run the result. There is no iPhone in CI, so everything
+# here is a static check -- above all that not one simulator slice found its way
+# into the link, because arm64 for the phone and arm64 for the simulator are the
+# same architecture and differ only in LC_BUILD_VERSION. A mixed binary links
+# without a word and then installs nowhere.
+#
+# The bundle carries no game data: the app fetches it on first start (patch
+# 0029), so the .ipa is a few dozen megabytes instead of 1.4 GB.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'patches/**'
+      - 'data/download.manifest'
+      - 'tools/get-source.sh'
+      - 'tools/build-deps-ios.sh'
+      - 'tools/build-mozjs-ios.sh'
+      - 'tools/build-sdl2-ios.sh'
+      - 'tools/ios-build.sh'
+      - 'tools/show-platform.sh'
+      - 'tools/make-app.sh'
+      - 'tools/make-ipa.sh'
+      - '.github/workflows/device.yml'
+
+jobs:
+  device:
+    name: pyrogenesis for a phone
+    runs-on: macos-14
+    timeout-minutes: 300
+    env:
+      SDK: iphoneos
+      SRC: ${{ github.workspace }}/ext/0ad-0.28.0
+      SKIP_JS_DEBUG: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: brew install ninja autoconf automake libtool
+
+      - name: Cache the 0 A.D. source tarball
+        uses: actions/cache@v4
+        with:
+          path: ext/0ad-0.28.0-unix-build.tar.xz
+          key: zeroad-src-0.28.0
+
+      # Its own namespace, and the SDK is in the key: the dependencies live in
+      # libraries/macos either way, so a shared key would hand the phone build
+      # simulator libraries and the mistake would only show at install time.
+      - name: Restore dependencies
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ext/0ad-0.28.0/libraries/macos
+            ext/0ad-0.28.0/libraries/source/spidermonkey/lib
+            ext/0ad-0.28.0/libraries/source/spidermonkey/include-release
+          key: deps-iphoneos-0.28.0-v1
+          restore-keys: deps-iphoneos-0.28.0-v1-
+
+      - name: Fetch and patch the source
+        run: tools/get-source.sh
+
+      - name: Build the dependencies
+        run: |
+          set -o pipefail
+          tools/build-deps-ios.sh "$SDK" "$SRC" 2>&1 | tail -n 400
+
+      - name: Save dependencies
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ext/0ad-0.28.0/libraries/macos
+            ext/0ad-0.28.0/libraries/source/spidermonkey/lib
+            ext/0ad-0.28.0/libraries/source/spidermonkey/include-release
+          key: deps-iphoneos-0.28.0-v1-${{ github.run_id }}
+
+      - name: Build pyrogenesis
+        run: |
+          set -o pipefail
+          tools/ios-build.sh "$SDK" "$SRC" 2>&1 | tail -n 200
+
+      - name: Every slice has to be a phone slice
+        run: |
+          tools/show-platform.sh "$SRC/binaries/system/pyrogenesis"
+          echo "--- und die Bibliotheken:"
+          BAD=0
+          for lib in $(find "$SRC/libraries/macos" -name "*.a" | sort) \
+                     "$SRC/libraries/source/spidermonkey/lib"/*.a; do
+              [ -e "$lib" ] || continue
+              line=$(tools/show-platform.sh "$lib")
+              printf '%s\n' "$line"
+              case "$line" in
+                  *IOSSIMULATOR*) BAD=1 ;;
+              esac
+          done
+          # Only IOSSIMULATOR is a failure. MACOS shows up as well and is fine:
+          # ICU has to be built for the host first before it can be built for the
+          # target, and that pass leaves its libraries behind.
+          [ "$BAD" = 0 ] || { echo "Simulator-Scheiben im Baum"; exit 1; }
+
+      - name: Bundle it, without the data
+        run: |
+          PLATFORM=iphoneos tools/make-app.sh "$SRC" - "$PWD/build/pyrogenesis.app"
+          tools/make-ipa.sh "$PWD/build/pyrogenesis.app" "$PWD/build/0ad-0.28.0-ios.ipa"
+
+      - name: What is in it
+        if: always()
+        run: |
+          plutil -p build/pyrogenesis.app/Info.plist || true
+          echo "--- Manifest:"
+          cat build/pyrogenesis.app/download.manifest || true
+          {
+              echo "## Die .ipa"
+              echo
+              echo '```'
+              ls -lh build/*.ipa 2>/dev/null
+              echo '```'
+              echo
+              echo "Unsigniert. Installieren mit Sideloadly oder AltStore; die"
+              echo "Spieldaten (1,4 GB) holt die App beim ersten Start selbst."
+              echo "Braucht iOS 17.4 oder neuer (BrowserEngineCore, Patch 0021)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Collect the logs
+        if: always()
+        run: |
+          mkdir -p out
+          find "$SRC/libraries/macos" -name config.log 2>/dev/null | while read -r f; do
+              lib=$(printf '%s' "$f" | sed "s|.*/libraries/macos/||; s|/.*||")
+              cp "$f" "out/$lib-config.log" || true
+          done
+          cp "${TMPDIR:-/tmp}/0ad-ios-build/build.log" out/ 2>/dev/null || true
+          ls "$SRC/libraries/macos/pkgconfig" > out/pkgconfig.txt 2>&1 || true
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iphone-ipa
+          path: |
+            build/*.ipa
+            out

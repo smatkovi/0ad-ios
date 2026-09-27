@@ -1,0 +1,1134 @@
+Fetch the game data on first start, six connections at a time.
+
+The app bundle carries no game data. An .ipa with the game in it would be 3.5 GB
+to sideload and pointless besides: the bundle is signed and read only, so the
+engine could not write a single file into it anyway. Patch 0017 already looks
+for downloaded data first and only falls back to the bundle; this is the part
+that downloads.
+
+3.5 GB, not the 1.4 GB the upstream release weighs: that number is the tar.xz,
+and xz compresses the game's zips by two and a half to one. Undoing that on the
+phone would need an xz decoder and a tar reader, neither of which is there, so
+what travels is the zips themselves.
+
+Three things about iOS decide the shape of it.
+
+* **There is no aria2c.** No child processes means no aria2c, no curl binary and
+  no unzip -- so the transfer happens inside the app, and the data is published
+  as plain zips the VFS reads in place (tools/make-data-release.sh). Parallel is
+  done the way aria2c does it: the file is cut into 8 MB chunks, six range
+  requests are in flight at a time, and each one is written straight into the
+  right offset of a file that was truncated to its final size. NSURLSession does
+  the transfers -- it is already linked, which libcurl's multi interface would
+  also have been, but Foundation brings redirect handling and connection reuse
+  along. Its HTTPMaximumConnectionsPerHost has to be raised: the default of four
+  would leave two of the six requests waiting.
+
+* **A file may come from several places.** A GitHub release asset may not exceed
+  2 GiB and public.zip is 3.5 GB, so it is published in parts of 1792 MiB. They
+  are not an archive format and nothing is joined afterwards: each part is
+  fetched into its own offset of the same file, exactly as the chunks are. The
+  manifest gives every part an offset and a length, and it is checked on the way
+  in -- parts must be contiguous, cover the file, and begin on a chunk boundary,
+  or a chunk would have to come from two parts at once. 1792 MiB is 224 chunks,
+  which is why that is the number.
+
+* **The main thread must go back to the run loop.** A download of 1.2 GB takes
+  minutes, and an app that does not answer for that long is killed. So the hook
+  in RunGameOrAtlas *returns* -- as the frame does since patch 0023 -- and the
+  transfer runs on a utility queue. The progress screen is a UIWindow of its
+  own, made here and gone before the engine asks SDL for a window of its own.
+
+* **It will be interrupted.** 3.5 GB is minutes on a good connection and a
+  morning on a bad one. A chunk that fails is not a failed download, it is one
+  more pass over whatever is still missing; and a launch that does not finish
+  leaves a state file behind, one character per chunk, so the next start
+  continues instead of starting over. The directory is called "data.part" until
+  every hash matches and only then renamed to "data", because Paths::RootData()
+  asks nothing more than whether the directory exists.
+
+Two things are checked rather than assumed. The server is asked for 1 KB before
+anything big is fetched: one that ignores Range answers with the whole part, and
+a data task handed 1.8 GB buffers all of it in memory before the completion
+handler ever sees the status code -- so that case falls back to streaming each
+part to a file instead. And every file is verified against the SHA-256 from the
+manifest, which travels in the bundle: the hashes are the ones this build was
+made against, not whatever a server serves today. They are also the hashes of
+the upstream files, because nothing here repacks anything.
+
+The manifest is also what keeps the smoke test unchanged. A build with data in
+the bundle has data in the bundle, ios_IsDataPresent() says so, and not a byte is
+downloaded.
+
+--- /dev/null
++++ source/lib/sysdep/os/osx/ios_data_download.h
+@@ -0,0 +1,66 @@
++/* Copyright (C) 2026 Wildfire Games.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining
++ * a copy of this software and associated documentation files (the
++ * "Software"), to deal in the Software without restriction, including
++ * without limitation the rights to use, copy, modify, merge, publish,
++ * distribute, sublicense, and/or sell copies of the Software, and to
++ * permit persons to whom the Software is furnished to do so, subject to
++ * the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included
++ * in all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
++ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
++ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
++ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
++ * CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
++ * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
++ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++ */
++
++#ifndef IOS_DATA_DOWNLOAD_H
++#define IOS_DATA_DOWNLOAD_H
++
++/**
++ * @file
++ * Fetching the game data into the app container on first start.
++ *
++ * An iOS app bundle is read only and signed, and the game data is 1.4 GB, so it
++ * cannot travel in the bundle: it is downloaded once, next to the writable data
++ * where Paths::RootData() looks for it first (see Paths.cpp).
++ */
++
++#include "lib/sysdep/os.h"
++
++#if OS_IOS
++
++#include <functional>
++
++/**
++ * Is there game data to run from?
++ *
++ * True if the download has finished at some point, or if this is a
++ * self-contained build with the data inside the bundle -- which is how the
++ * simulator smoke test runs, and then nothing is ever downloaded.
++ */
++bool ios_IsDataPresent();
++
++/**
++ * Fetch the game data, then call @p whenReady on the main queue.
++ *
++ * Returns immediately. The transfer runs on its own queue and a window of its
++ * own shows how far it has got, because the main thread must go back to the run
++ * loop: iOS kills an app that does not answer, and the frame belongs to UIKit
++ * here anyway (see main.cpp).
++ *
++ * @p whenReady is not called if the transfer fails; the window then offers to
++ * try again, which is the only sensible thing left -- the engine cannot start
++ * without data.
++ */
++void ios_DownloadData(std::function<void()> whenReady);
++
++#endif // OS_IOS
++
++#endif // IOS_DATA_DOWNLOAD_H
+--- /dev/null
++++ source/lib/sysdep/os/osx/ios_data_download.mm
+@@ -0,0 +1,953 @@
++/* Copyright (C) 2026 Wildfire Games.
++ *
++ * Permission is hereby granted, free of charge, to any person obtaining
++ * a copy of this software and associated documentation files (the
++ * "Software"), to deal in the Software without restriction, including
++ * without limitation the rights to use, copy, modify, merge, publish,
++ * distribute, sublicense, and/or sell copies of the Software, and to
++ * permit persons to whom the Software is furnished to do so, subject to
++ * the following conditions:
++ *
++ * The above copyright notice and this permission notice shall be included
++ * in all copies or substantial portions of the Software.
++ *
++ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
++ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
++ * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
++ * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
++ * CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
++ * TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
++ * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
++ */
++
++#include "lib/sysdep/os.h"
++
++#if OS_IOS
++
++#import <CommonCrypto/CommonDigest.h>
++#import <Foundation/Foundation.h>
++#import <UIKit/UIKit.h>
++
++#include <algorithm>
++#include <atomic>
++#include <cstdio>
++#include <cstring>
++#include <cerrno>
++#include <functional>
++#include <string>
++#include <vector>
++
++#include <fcntl.h>
++#include <unistd.h>
++
++#include "ios_data_download.h"
++#include "osx_bundle.h"
++#include "osx_paths.h"
++
++namespace
++{
++
++/**
++ * Eight megabytes per request, six requests at a time.
++ *
++ * This is what aria2c does, and doing it in the app is not a preference but the
++ * only option: iOS starts no child processes, so there is no aria2c, no curl
++ * binary and no unzip either -- which is also why the data is republished as
++ * plain zips the engine reads in place (tools/make-data-release.sh).
++ *
++ * Six because one connection to a CDN is bandwidth-limited far below what a
++ * phone on wifi can take, and because NSURLSession would otherwise open four:
++ * HTTPMaximumConnectionsPerHost has to be raised to match, or "parallel" is a
++ * word and nothing else.
++ */
++constexpr long long CHUNK = 8 * 1024 * 1024;
++constexpr int PARALLEL = 6;
++
++// A pass fetches every chunk that is still missing, so a failed chunk is not a
++// failed download -- it is one more pass. Four of them, with a pause that grows,
++// is enough for a train leaving a tunnel and not enough to hang forever.
++constexpr int PASSES = 4;
++
++// Keep this much free after the download; a phone that is full should say so
++// before it spends an hour on a transfer it cannot finish.
++constexpr long long SPARE = 200LL * 1024 * 1024;
++
++/**
++ * Where one part of a file comes from.
++ *
++ * A file can have more than one, because a release asset may not be larger than
++ * 2 GiB and public.zip is 3.5 GB. The parts are not an archive format and
++ * nothing is joined together afterwards: each one is simply written at its own
++ * offset in the file, which is what the chunk machinery below does anyway.
++ */
++struct Source
++{
++	std::string url;
++	long long offset{0};	// where in the finished file this part begins
++	long long length{0};
++};
++
++struct Entry
++{
++	std::string path;	// relative to the data root, e.g. mods/public/public.zip
++	std::string sha256;	// lower case hex, of the whole file
++	long long size{0};
++	std::vector<Source> sources;
++};
++
++/**
++ * One file being fetched, and how far it has got.
++ *
++ * `state` has one character per chunk, '1' once that chunk is on disk, and it is
++ * written to `statePath` after every chunk: this is what makes the download
++ * survive being interrupted, which at 3.5 GB it will be.
++ */
++struct FileJob
++{
++	Entry entry;
++	int fd{-1};
++	std::string target;
++	std::string statePath;
++	std::string state;
++	long long chunks{0};
++};
++
++struct Progress
++{
++	long long total{0};
++	std::atomic<long long> done{0};
++	std::atomic<double> reportedAt{0};
++};
++
++// ---------------------------------------------------------------------------
++// Notes
++//
++// The same file the frame notes go to (see main.cpp): an app started by
++// `simctl launch` has nowhere to print, so this is the only way to see what
++// happened -- on the device too, where UIFileSharingEnabled makes it reachable
++// from the Files app.
++
++void Note(NSString* format, ...) NS_FORMAT_FUNCTION(1, 2);
++void Note(NSString* format, ...)
++{
++	va_list args;
++	va_start(args, format);
++	NSString* text = [[NSString alloc] initWithFormat:format arguments:args];
++	va_end(args);
++
++	NSLog(@"0ad: %@", text);
++
++	NSString* path = [NSHomeDirectory()
++		stringByAppendingPathComponent:@"Documents/ios-frames.txt"];
++	if (FILE* file = std::fopen(path.UTF8String, "a"))
++	{
++		std::fprintf(file, "download: %s\n", text.UTF8String);
++		std::fclose(file);
++	}
++	[text release];
++}
++
++// ---------------------------------------------------------------------------
++// Paths
++
++NSString* Str(const std::string& s)
++{
++	return [NSString stringWithUTF8String:s.c_str()];
++}
++
++std::string DataFinal()
++{
++	const std::string appSupport = osx_GetAppSupportPath();
++	return appSupport.empty() ? std::string() : appSupport + "/0ad/data";
++}
++
++// Downloaded into ".part" and renamed when everything is there and every hash
++// matches: Paths::RootData() only asks whether the directory exists, so a
++// half-finished one must not carry that name.
++std::string DataPartial()
++{
++	const std::string final = DataFinal();
++	return final.empty() ? std::string() : final + ".part";
++}
++
++std::string ManifestPath()
++{
++	const std::string resources = osx_GetBundleResourcesPath();
++	return resources.empty() ? std::string() : resources + "/download.manifest";
++}
++
++bool DirExists(const std::string& path)
++{
++	if (path.empty())
++		return false;
++	BOOL isDir = NO;
++	return [[NSFileManager defaultManager] fileExistsAtPath:Str(path) isDirectory:&isDir] && isDir;
++}
++
++bool MakeDirs(const std::string& path)
++{
++	return [[NSFileManager defaultManager] createDirectoryAtPath:Str(path)
++		withIntermediateDirectories:YES attributes:nil error:nil] == YES;
++}
++
++// ---------------------------------------------------------------------------
++// The manifest
++//
++// Tab-separated, generated by tools/make-data-release.sh and shipped inside the
++// bundle, so the sizes and hashes are the ones this build was made against and
++// not whatever a server says today.
++
++bool ReadManifest(std::vector<Entry>& entries, std::string& error)
++{
++	const std::string path = ManifestPath();
++	if (path.empty())
++	{
++		error = "no bundle to read the manifest from";
++		return false;
++	}
++	NSString* text = [NSString stringWithContentsOfFile:Str(path)
++		encoding:NSUTF8StringEncoding error:nil];
++	if (!text)
++	{
++		error = "the app has no download.manifest -- it was built without one";
++		return false;
++	}
++
++	for (NSString* rawLine in [text componentsSeparatedByString:@"\n"])
++	{
++		NSString* line = [rawLine stringByTrimmingCharactersInSet:
++			[NSCharacterSet whitespaceCharacterSet]];
++		if (line.length == 0 || [line hasPrefix:@"#"])
++			continue;
++		NSArray<NSString*>* fields = [line componentsSeparatedByString:@"\t"];
++		if (fields.count != 6)
++		{
++			error = "the manifest has a line that is not six fields";
++			return false;
++		}
++		const std::string path = fields[0].UTF8String;
++		const long long size = fields[1].longLongValue;
++		const std::string hash = [fields[2] lowercaseString].UTF8String;
++		Source source;
++		source.url = fields[3].UTF8String;
++		source.offset = fields[4].longLongValue;
++		source.length = fields[5].longLongValue;
++
++		// The manifest decides where files land, so it may not point outside.
++		if (path.empty() || path[0] == '/' || path.find("..") != std::string::npos)
++		{
++			error = "the manifest names a path outside the data directory";
++			return false;
++		}
++		if (size < 0 || hash.size() != 64 || source.length <= 0 ||
++			source.offset < 0 || source.offset + source.length > size ||
++			source.url.compare(0, 8, "https://") != 0)
++		{
++			error = "the manifest has a bad size, hash, offset or URL";
++			return false;
++		}
++
++		// Several lines with the same path are the parts of one file.
++		auto existing = std::find_if(entries.begin(), entries.end(),
++			[&path](const Entry& entry) { return entry.path == path; });
++		if (existing == entries.end())
++		{
++			Entry entry;
++			entry.path = path;
++			entry.size = size;
++			entry.sha256 = hash;
++			entry.sources.push_back(std::move(source));
++			entries.push_back(std::move(entry));
++		}
++		else if (existing->size != size || existing->sha256 != hash)
++		{
++			error = "the manifest gives " + path + " two different sizes";
++			return false;
++		}
++		else
++			existing->sources.push_back(std::move(source));
++	}
++	if (entries.empty())
++	{
++		error = "the manifest lists nothing to download";
++		return false;
++	}
++
++	for (Entry& entry : entries)
++	{
++		std::sort(entry.sources.begin(), entry.sources.end(),
++			[](const Source& a, const Source& b) { return a.offset < b.offset; });
++		long long at = 0;
++		for (std::size_t i = 0; i < entry.sources.size(); ++i)
++		{
++			const Source& source = entry.sources[i];
++			// Every part has to begin on a chunk boundary and, except for the
++			// last one, end on one as well. That is what lets a chunk be fetched
++			// from exactly one part -- tools/make-data-release.sh cuts at 1792
++			// MiB, which is 224 chunks.
++			const bool last = i + 1 == entry.sources.size();
++			if (source.offset != at || source.offset % CHUNK != 0 ||
++				(!last && source.length % CHUNK != 0))
++			{
++				error = entry.path + " is cut into parts that do not line up";
++				return false;
++			}
++			at += source.length;
++		}
++		if (at != entry.size)
++		{
++			error = entry.path + " is missing a part";
++			return false;
++		}
++	}
++	return true;
++}
++
++/**
++ * Which part of the file does this offset come from?
++ */
++const Source* SourceAt(const Entry& entry, long long offset)
++{
++	for (const Source& source : entry.sources)
++		if (offset >= source.offset && offset < source.offset + source.length)
++			return &source;
++	return nullptr;
++}
++
++// ---------------------------------------------------------------------------
++// Chunk bookkeeping
++
++long long ChunkLength(const FileJob& job, long long index)
++{
++	return std::min<long long>(CHUNK, job.entry.size - index * CHUNK);
++}
++
++bool AllDone(const FileJob& job)
++{
++	return job.state.find('0') == std::string::npos;
++}
++
++long long DoneBytes(const FileJob& job)
++{
++	long long done = 0;
++	for (long long i = 0; i < job.chunks; ++i)
++		if (job.state[i] == '1')
++			done += ChunkLength(job, i);
++	return done;
++}
++
++void WriteState(const FileJob& job)
++{
++	if (FILE* file = std::fopen(job.statePath.c_str(), "w"))
++	{
++		std::fwrite(job.state.data(), 1, job.state.size(), file);
++		std::fclose(file);
++	}
++}
++
++void ReadState(FileJob& job)
++{
++	job.state.assign(static_cast<std::size_t>(job.chunks), '0');
++	if (FILE* file = std::fopen(job.statePath.c_str(), "r"))
++	{
++		std::string stored(static_cast<std::size_t>(job.chunks), '0');
++		const std::size_t read = std::fread(&stored[0], 1, stored.size(), file);
++		// A short or long state file belongs to a different manifest: start over
++		// rather than trust an offset that has moved.
++		if (read == stored.size() && std::fgetc(file) == EOF)
++			job.state = stored;
++		std::fclose(file);
++	}
++}
++
++bool WriteAt(int fd, const void* data, std::size_t length, long long offset)
++{
++	const char* at = static_cast<const char*>(data);
++	std::size_t left = length;
++	while (left > 0)
++	{
++		const ssize_t written = pwrite(fd, at, left, offset);
++		if (written <= 0)
++			return false;
++		at += written;
++		left -= static_cast<std::size_t>(written);
++		offset += written;
++	}
++	return true;
++}
++
++bool VerifyHash(const std::string& path, const std::string& expected)
++{
++	FILE* file = std::fopen(path.c_str(), "r");
++	if (!file)
++		return false;
++	CC_SHA256_CTX context;
++	CC_SHA256_Init(&context);
++	std::vector<unsigned char> buffer(1024 * 1024);
++	while (const std::size_t got = std::fread(buffer.data(), 1, buffer.size(), file))
++		CC_SHA256_Update(&context, buffer.data(), static_cast<CC_LONG>(got));
++	const bool ok = std::ferror(file) == 0;
++	std::fclose(file);
++
++	unsigned char digest[CC_SHA256_DIGEST_LENGTH];
++	CC_SHA256_Final(digest, &context);
++	if (!ok)
++		return false;
++
++	std::string hex;
++	hex.reserve(sizeof(digest) * 2);
++	for (unsigned char byte : digest)
++	{
++		char pair[3];
++		std::snprintf(pair, sizeof(pair), "%02x", byte);
++		hex += pair;
++	}
++	return hex == expected;
++}
++
++} // anonymous namespace
++
++// ---------------------------------------------------------------------------
++// The screen
++//
++// A window of our own, because SDL has not made one yet: the engine asks for it
++// much later, and by then this one is gone again. Everything here hops onto the
++// main queue itself, so the transfer can call it from wherever it is.
++
++@interface ZeroADDownloadScreen : NSObject
++- (void)show;
++- (void)setLine:(NSString*)line detail:(NSString*)detail fraction:(double)fraction;
++- (void)showError:(NSString*)text retry:(void (^)(void))retry;
++- (void)hide;
++@end
++
++@implementation ZeroADDownloadScreen
++{
++	UIWindow* _window;
++	UILabel* _line;
++	UILabel* _detail;
++	UIProgressView* _bar;
++	UIButton* _retry;
++}
++
++- (void)show
++{
++	dispatch_async(dispatch_get_main_queue(), ^{
++		if (_window)
++			return;
++		_window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
++		UIViewController* controller = [[UIViewController alloc] init];
++		controller.view.backgroundColor = [UIColor blackColor];
++
++		const CGRect bounds = controller.view.bounds;
++		const CGFloat width = bounds.size.width;
++		const CGFloat height = bounds.size.height;
++		const UIViewAutoresizing centred =
++			UIViewAutoresizingFlexibleWidth |
++			UIViewAutoresizingFlexibleTopMargin |
++			UIViewAutoresizingFlexibleBottomMargin;
++
++		_line = [[UILabel alloc] initWithFrame:CGRectMake(0, height / 2 - 60, width, 26)];
++		_line.textAlignment = NSTextAlignmentCenter;
++		_line.textColor = [UIColor whiteColor];
++		_line.font = [UIFont boldSystemFontOfSize:19];
++		_line.text = @"0 A.D.";
++		_line.autoresizingMask = centred;
++		[controller.view addSubview:_line];
++
++		_bar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
++		_bar.frame = CGRectMake(width * 0.2, height / 2 - 12, width * 0.6, 4);
++		_bar.autoresizingMask = centred;
++		[controller.view addSubview:_bar];
++
++		_detail = [[UILabel alloc] initWithFrame:CGRectMake(0, height / 2, width, 40)];
++		_detail.textAlignment = NSTextAlignmentCenter;
++		_detail.textColor = [UIColor colorWithWhite:0.7 alpha:1.0];
++		_detail.font = [UIFont systemFontOfSize:14];
++		_detail.numberOfLines = 2;
++		_detail.text = @"Fetching the game data. This happens once.";
++		_detail.autoresizingMask = centred;
++		[controller.view addSubview:_detail];
++
++		_retry = [UIButton buttonWithType:UIButtonTypeSystem];
++		_retry.frame = CGRectMake(width * 0.35, height / 2 + 50, width * 0.3, 40);
++		_retry.autoresizingMask = centred;
++		_retry.hidden = YES;
++		[controller.view addSubview:_retry];
++
++		_window.rootViewController = controller;
++		// Above whatever the launch screen left behind, below nothing: SDL's
++		// window does not exist yet.
++		_window.windowLevel = UIWindowLevelNormal + 1;
++		[_window makeKeyAndVisible];
++		[controller release];
++	});
++}
++
++- (void)setLine:(NSString*)line detail:(NSString*)detail fraction:(double)fraction
++{
++	dispatch_async(dispatch_get_main_queue(), ^{
++		if (line)
++			_line.text = line;
++		if (detail)
++			_detail.text = detail;
++		if (fraction >= 0)
++			[_bar setProgress:static_cast<float>(fraction) animated:NO];
++	});
++}
++
++- (void)showError:(NSString*)text retry:(void (^)(void))retry
++{
++	void (^again)(void) = [retry copy];
++	dispatch_async(dispatch_get_main_queue(), ^{
++		_line.text = @"The download did not finish";
++		_detail.text = text;
++		_bar.hidden = YES;
++		[_retry setTitle:@"Try again" forState:UIControlStateNormal];
++		// A block-backed action instead of a target and a selector: there is no
++		// object here that wants to own one. It carries an identifier so that a
++		// second failure replaces the action instead of adding another one --
++		// two actions would mean two downloads on the next tap.
++		[_retry removeActionForIdentifier:@"retry"
++			forControlEvents:UIControlEventTouchUpInside];
++		[_retry addAction:[UIAction actionWithTitle:@"" image:nil identifier:@"retry"
++			handler:^(__unused UIAction* action) {
++			_retry.hidden = YES;
++			_bar.hidden = NO;
++			_line.text = @"0 A.D.";
++			again();
++		}] forControlEvents:UIControlEventTouchUpInside];
++		_retry.hidden = NO;
++	});
++}
++
++- (void)hide
++{
++	dispatch_async(dispatch_get_main_queue(), ^{
++		_window.hidden = YES;
++		_window.rootViewController = nil;
++		[_window release];
++		_window = nil;
++	});
++}
++
++@end
++
++namespace
++{
++
++ZeroADDownloadScreen* g_Screen = nil;
++std::function<void()> g_WhenReady;
++
++void Report(Progress& progress, const std::string& detail)
++{
++	// Six connections finishing chunks would otherwise redraw the bar hundreds
++	// of times a second.
++	const double now = CFAbsoluteTimeGetCurrent();
++	double before = progress.reportedAt.load();
++	if (now - before < 0.25)
++		return;
++	if (!progress.reportedAt.compare_exchange_strong(before, now))
++		return;
++
++	const long long done = progress.done.load();
++	const double fraction = progress.total > 0
++		? static_cast<double>(done) / static_cast<double>(progress.total) : 0.0;
++	NSString* text = [NSString stringWithFormat:@"%@%lld of %lld MB",
++		detail.empty() ? @"" : [NSString stringWithFormat:@"%@ — ", Str(detail)],
++		done / (1024 * 1024), progress.total / (1024 * 1024)];
++	[g_Screen setLine:nil detail:text fraction:fraction];
++}
++
++NSURLSession* MakeSession()
++{
++	NSURLSessionConfiguration* configuration =
++		[NSURLSessionConfiguration defaultSessionConfiguration];
++	// Without this the four connections iOS allows per host are all six requests
++	// get, and two of them just wait.
++	configuration.HTTPMaximumConnectionsPerHost = PARALLEL;
++	configuration.timeoutIntervalForRequest = 60;
++	// Nothing here is worth caching, and caching it would mean writing 3.5 GB
++	// twice onto a phone.
++	configuration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
++	configuration.URLCache = nil;
++	return [NSURLSession sessionWithConfiguration:configuration];
++}
++
++NSMutableURLRequest* RangeRequest(const std::string& url, long long begin, long long length)
++{
++	NSMutableURLRequest* request =
++		[NSMutableURLRequest requestWithURL:[NSURL URLWithString:Str(url)]];
++	[request setValue:[NSString stringWithFormat:@"bytes=%lld-%lld", begin, begin + length - 1]
++		forHTTPHeaderField:@"Range"];
++	return request;
++}
++
++/**
++ * Does the server answer a range with a range?
++ *
++ * Asked once, before anything big is fetched, because the failure it guards
++ * against is expensive: a server that ignores Range answers with the whole
++ * part, and a data task that has been handed 1.8 GB buffers all of it in memory
++ * before the completion handler ever gets to look at the status code. GitHub's
++ * asset storage does honour ranges; a mirror behind it might not.
++ */
++bool ServerHonoursRange(NSURLSession* session, const Source& source)
++{
++	const long long probe = std::min<long long>(1024, source.length);
++	if (probe <= 0)
++		return true;
++	dispatch_semaphore_t waiting = dispatch_semaphore_create(0);
++	__block bool ok = false;
++	NSURLSessionDataTask* task = [session dataTaskWithRequest:RangeRequest(source.url, 0, probe)
++		completionHandler:^(NSData* data, NSURLResponse* response, NSError* error)
++	{
++		NSHTTPURLResponse* http = [response isKindOfClass:[NSHTTPURLResponse class]]
++			? static_cast<NSHTTPURLResponse*>(response) : nil;
++		ok = !error && http.statusCode == 206 &&
++			static_cast<long long>(data.length) == probe;
++		if (!ok)
++			Note(@"range probe: status %ld, %lu bytes, %@",
++				static_cast<long>(http.statusCode), static_cast<unsigned long>(data.length),
++				error ? error.localizedDescription : @"no error");
++		dispatch_semaphore_signal(waiting);
++	}];
++	[task resume];
++	dispatch_semaphore_wait(waiting, DISPATCH_TIME_FOREVER);
++	return ok;
++}
++
++/**
++ * Fetch every chunk that is still missing, PARALLEL at a time.
++ */
++void OnePass(NSURLSession* session, FileJob& job, Progress& progress)
++{
++	dispatch_semaphore_t slots = dispatch_semaphore_create(PARALLEL);
++	dispatch_group_t group = dispatch_group_create();
++	// Not a std::mutex: a block copies the C++ objects it captures, and a mutex
++	// cannot be copied. This one is an object the block simply retains.
++	dispatch_semaphore_t stateLock = dispatch_semaphore_create(1);
++
++	for (long long index = 0; index < job.chunks; ++index)
++	{
++		if (job.state[index] == '1')
++			continue;
++		const long long begin = index * CHUNK;
++		const long long length = ChunkLength(job, index);
++		// Which part the chunk is in, and where inside that part it sits. The
++		// manifest is checked to cut parts on chunk boundaries, so a chunk never
++		// straddles two of them.
++		const Source* source = SourceAt(job.entry, begin);
++		if (!source)
++		{
++			Note(@"chunk %lld of %s has no part", index, job.entry.path.c_str());
++			continue;
++		}
++		const long long within = begin - source->offset;
++		const bool wholePart = within == 0 && length == source->length;
++
++		dispatch_semaphore_wait(slots, DISPATCH_TIME_FOREVER);
++		dispatch_group_enter(group);
++		NSURLSessionDataTask* task =
++			[session dataTaskWithRequest:RangeRequest(source->url, within, length)
++			completionHandler:^(NSData* data, NSURLResponse* response, NSError* error)
++		{
++			NSHTTPURLResponse* http = [response isKindOfClass:[NSHTTPURLResponse class]]
++				? static_cast<NSHTTPURLResponse*>(response) : nil;
++			const bool answered = !error && http &&
++				(http.statusCode == 206 ||
++					// 200 is only the honest answer when the range covered the
++					// whole part; otherwise the server ignored Range and this
++					// body does not belong at this offset.
++					(http.statusCode == 200 && wholePart));
++			if (!answered || static_cast<long long>(data.length) != length)
++			{
++				Note(@"chunk %lld of %s: status %ld, %lu bytes, %@", index,
++					job.entry.path.c_str(), static_cast<long>(http.statusCode),
++					static_cast<unsigned long>(data.length),
++					error ? error.localizedDescription : @"wrong length");
++			}
++			else if (!WriteAt(job.fd, data.bytes, data.length, begin))
++			{
++				Note(@"chunk %lld of %s: cannot write (%s)", index,
++					job.entry.path.c_str(), std::strerror(errno));
++			}
++			else
++			{
++				dispatch_semaphore_wait(stateLock, DISPATCH_TIME_FOREVER);
++				job.state[index] = '1';
++				WriteState(job);
++				dispatch_semaphore_signal(stateLock);
++				progress.done += length;
++				Report(progress, job.entry.path);
++			}
++			dispatch_semaphore_signal(slots);
++			dispatch_group_leave(group);
++		}];
++		[task resume];
++	}
++	dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
++}
++
++/**
++ * The one-connection fallback, for a server that does not do ranges.
++ */
++bool FetchWholeSources(NSURLSession* session, FileJob& job, Progress& progress)
++{
++	for (const Source& source : job.entry.sources)
++	{
++		Report(progress, job.entry.path);
++		dispatch_semaphore_t waiting = dispatch_semaphore_create(0);
++		// A download task streams to a file of its own, so even 1.8 GB does not
++		// go through memory. From there it is copied to where it belongs, which
++		// costs a second pass over the bytes -- acceptable for a path that is
++		// only taken when the server cannot do ranges at all.
++		__block NSString* temporaryPath = nil;
++		NSURLSessionDownloadTask* task =
++			[session downloadTaskWithURL:[NSURL URLWithString:Str(source.url)]
++			completionHandler:^(NSURL* temporary, NSURLResponse* response, NSError* error)
++		{
++			NSHTTPURLResponse* http = [response isKindOfClass:[NSHTTPURLResponse class]]
++				? static_cast<NSHTTPURLResponse*>(response) : nil;
++			if (!error && http.statusCode == 200 && temporary)
++			{
++				// The task deletes its file as soon as the handler returns.
++				NSString* kept = [NSTemporaryDirectory()
++					stringByAppendingPathComponent:@"0ad-part"];
++				[[NSFileManager defaultManager] removeItemAtPath:kept error:nil];
++				if ([[NSFileManager defaultManager] moveItemAtPath:temporary.path
++						toPath:kept error:nil])
++					temporaryPath = [kept retain];
++			}
++			if (!temporaryPath)
++				Note(@"part of %s: status %ld, %@", job.entry.path.c_str(),
++					static_cast<long>(http.statusCode),
++					error ? error.localizedDescription : @"could not be kept");
++			dispatch_semaphore_signal(waiting);
++		}];
++		[task resume];
++		dispatch_semaphore_wait(waiting, DISPATCH_TIME_FOREVER);
++		if (!temporaryPath)
++			return false;
++
++		bool ok = false;
++		if (FILE* file = std::fopen(temporaryPath.UTF8String, "r"))
++		{
++			std::vector<char> buffer(1024 * 1024);
++			long long at = source.offset;
++			ok = true;
++			while (const std::size_t got =
++				std::fread(buffer.data(), 1, buffer.size(), file))
++			{
++				if (!WriteAt(job.fd, buffer.data(), got, at))
++				{
++					ok = false;
++					break;
++				}
++				at += got;
++			}
++			ok = ok && at == source.offset + source.length;
++			std::fclose(file);
++		}
++		[[NSFileManager defaultManager] removeItemAtPath:temporaryPath error:nil];
++		[temporaryPath release];
++		if (!ok)
++		{
++			Note(@"part of %s: could not be written into place", job.entry.path.c_str());
++			return false;
++		}
++		progress.done += source.length;
++		Report(progress, job.entry.path);
++	}
++	// Nothing was tracked chunk by chunk here, so say so in one go: the hash
++	// check below is what decides whether this worked.
++	job.state.assign(static_cast<std::size_t>(job.chunks), '1');
++	WriteState(job);
++	return true;
++}
++
++bool DoDownload(std::string& error)
++{
++	const std::string partial = DataPartial();
++	const std::string final = DataFinal();
++	if (partial.empty())
++	{
++		error = "there is no Application Support directory to write to";
++		return false;
++	}
++
++	std::vector<Entry> entries;
++	if (!ReadManifest(entries, error))
++		return false;
++
++	if (!MakeDirs(partial))
++	{
++		error = "cannot create the data directory";
++		return false;
++	}
++
++	Progress progress;
++	std::vector<FileJob> jobs;
++	jobs.reserve(entries.size());
++	for (Entry& entry : entries)
++	{
++		FileJob job;
++		job.entry = entry;
++		job.target = partial + "/" + entry.path;
++		job.statePath = job.target + ".parts";
++		job.chunks = (entry.size + CHUNK - 1) / CHUNK;
++
++		const std::size_t slash = job.target.find_last_of('/');
++		if (slash != std::string::npos && !MakeDirs(job.target.substr(0, slash)))
++		{
++			error = "cannot create " + entry.path;
++			return false;
++		}
++		job.fd = open(job.target.c_str(), O_RDWR | O_CREAT, 0644);
++		if (job.fd < 0 || ftruncate(job.fd, entry.size) != 0)
++		{
++			error = "cannot write " + entry.path + " (" + std::strerror(errno) + ")";
++			return false;
++		}
++		ReadState(job);
++		progress.total += entry.size;
++		progress.done += DoneBytes(job);
++		jobs.push_back(std::move(job));
++	}
++
++	const long long missing = progress.total - progress.done.load();
++	NSDictionary* attributes = [[NSFileManager defaultManager]
++		attributesOfFileSystemForPath:Str(partial) error:nil];
++	const long long available = [attributes[NSFileSystemFreeSize] longLongValue];
++	if (available > 0 && available < missing + SPARE)
++	{
++		char text[256];
++		std::snprintf(text, sizeof(text),
++			"%lld MB are needed and %lld MB are free. Make room and try again.",
++			(missing + SPARE) / (1024 * 1024), available / (1024 * 1024));
++		error = text;
++		return false;
++	}
++	Note(@"%lld MB to fetch, %lld MB free", missing / (1024 * 1024),
++		available / (1024 * 1024));
++
++	NSURLSession* session = MakeSession();
++	const bool ranges = ServerHonoursRange(session, jobs.front().entry.sources.front());
++	Note(@"ranges: %s", ranges ? "yes, six at a time" : "no, one connection");
++
++	bool ok = true;
++	for (FileJob& job : jobs)
++	{
++		if (ranges)
++		{
++			for (int pass = 0; pass < PASSES && !AllDone(job); ++pass)
++			{
++				if (pass > 0)
++				{
++					Note(@"%s: pass %d", job.entry.path.c_str(), pass + 1);
++					[NSThread sleepForTimeInterval:2.0 * pass];
++				}
++				OnePass(session, job, progress);
++			}
++			ok = AllDone(job);
++		}
++		else
++			ok = FetchWholeSources(session, job, progress);
++
++		if (job.fd >= 0)
++		{
++			close(job.fd);
++			job.fd = -1;
++		}
++		if (!ok)
++		{
++			error = job.entry.path + " did not come down completely";
++			break;
++		}
++
++		[g_Screen setLine:nil detail:Str("Checking " + job.entry.path) fraction:-1];
++		if (!VerifyHash(job.target, job.entry.sha256))
++		{
++			// Something changed under us, or a chunk arrived wrong and said it
++			// was right. Throw the file away so that trying again starts over
++			// instead of hashing the same bad bytes.
++			unlink(job.target.c_str());
++			unlink(job.statePath.c_str());
++			error = job.entry.path + " arrived damaged (checksum)";
++			ok = false;
++			break;
++		}
++		unlink(job.statePath.c_str());
++		Note(@"%s: complete and verified", job.entry.path.c_str());
++	}
++
++	// Descriptors of files that were never reached.
++	for (FileJob& job : jobs)
++		if (job.fd >= 0)
++			close(job.fd);
++	if (!ok)
++		return false;
++
++	NSFileManager* files = [NSFileManager defaultManager];
++	// Only now does the directory get the name Paths::RootData() looks for.
++	[files removeItemAtPath:Str(final) error:nil];
++	if (![files moveItemAtPath:Str(partial) toPath:Str(final) error:nil])
++	{
++		error = "the data could not be moved into place";
++		return false;
++	}
++	Note(@"data complete in %s", final.c_str());
++	return true;
++}
++
++void StartAttempt()
++{
++	dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
++		NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
++		std::string error;
++		const bool ok = DoDownload(error);
++		if (!ok)
++			Note(@"failed: %s", error.c_str());
++		NSString* message = ok ? @"" : Str(error);
++		[message retain];
++		[pool release];
++
++		dispatch_async(dispatch_get_main_queue(), ^{
++			if (ok)
++			{
++				[g_Screen hide];
++				if (g_WhenReady)
++					g_WhenReady();
++			}
++			else
++				[g_Screen showError:message retry:^{ StartAttempt(); }];
++			[message release];
++		});
++	});
++}
++
++} // anonymous namespace
++
++bool ios_IsDataPresent()
++{
++	// mods, not config: a directory with only config in it is what an
++	// interrupted first start leaves behind, and the engine cannot mount it.
++	const std::string data = DataFinal();
++	if (!data.empty() && DirExists(data + "/mods"))
++		return true;
++	// A self-contained build has the data in the bundle. That is how the
++	// simulator smoke test runs, and then nothing is downloaded at all.
++	return DirExists(osx_GetBundleResourcesPath() + "/data/mods");
++}
++
++void ios_DownloadData(std::function<void()> whenReady)
++{
++	g_WhenReady = std::move(whenReady);
++	if (!g_Screen)
++		g_Screen = [[ZeroADDownloadScreen alloc] init];
++	[g_Screen show];
++	Note(@"no game data yet -- fetching it");
++	StartAttempt();
++}
++
++#endif // OS_IOS
+--- source/main.cpp
++++ source/main.cpp
+@@ -556,6 +556,8 @@
+ // moved into a helper function to ensure args is destroyed before
+ // exit(), which may result in a memory leak.
+ #if OS_IOS
++#include "lib/sysdep/os/osx/ios_data_download.h"
++
+ #include <dispatch/dispatch.h>
+ 
+ // glReadPixels for the frame note below; the engine itself goes through glad.
+@@ -729,6 +731,35 @@
+ 
+ static void RunGameOrAtlas(const std::span<const char* const> argv)
+ {
++#if OS_IOS
++	// The game data is not in the bundle here (see Paths::RootData): it is
++	// fetched into the app container on first start, and nothing below this line
++	// can run before it is there. The transfer must not happen on this thread --
++	// iOS ends an app that stops answering, and the run loop is UIKit's -- so
++	// this returns, and the download calls us again when the data has arrived.
++	//
++	// Nothing has been constructed at this point, which is the reason the hook
++	// is the very first thing in the function: coming back has to be a first
++	// start, not a second one.
++	if (!ios_IsDataPresent())
++	{
++		// argv points into what SDL kept for the process, but a copy costs
++		// nothing and this function is now something that returns and comes
++		// back later.
++		static std::vector<std::string> saved;
++		static std::vector<const char*> savedArgv;
++		if (saved.empty())
++		{
++			for (const char* argument : argv)
++				saved.emplace_back(argument);
++			for (const std::string& argument : saved)
++				savedArgv.push_back(argument.c_str());
++		}
++		ios_DownloadData([]{ RunGameOrAtlas({savedArgv.data(), savedArgv.size()}); });
++		return;
++	}
++#endif
++
+ 	const CmdLineArgs args(argv);
+ 
+ 	g_CmdLineArgs = args;

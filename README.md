@@ -5,8 +5,10 @@ Companion to [0ad-android](https://github.com/smatkovi/0ad-android) and
 same version, the same OpenGL ES path and the same touch layer — only the
 platform below it changes.
 
-**Status: both probes are green.** Nothing is ported yet, but the two
-questions that decide the shape of the port are answered:
+**Status: it runs in the simulator, with sound; there is an unsigned `.ipa` for
+a phone that nobody has installed yet.** The two probes that started this are
+below for the record; they answered the questions that decided the shape of the
+port:
 
 | | answer |
 | --- | --- |
@@ -170,6 +172,50 @@ launch` goes nowhere at all. What settled it was writing the evidence into a
 file in the app container and reading the buffer back after a bare clear:
 black, with GL_INVALID_ENUM.
 
+## On a phone
+
+Nothing in this port has ever run on an iPhone -- but the build for one exists,
+and what it does differently is worth writing down.
+
+**The bundle carries no game data.** `tools/make-app.sh <quellbaum> - <ziel.app>`
+leaves it out and puts a manifest in instead; `tools/make-ipa.sh` wraps the
+result in the `Payload/` directory that makes an `.ipa`. Nothing is signed:
+Sideloadly, AltStore and Xcode all re-sign what they install, so a signature from
+the build would only be thrown away. An Apple developer account is good for a
+year, a free account for seven days.
+
+**The data is fetched on first start** (patch 0029), the way aria2c would do it
+if aria2c could run here -- it cannot, because iOS starts no child processes,
+which is also why there is no unzip and no tar on the phone. So: 8 MB chunks, six
+range requests at a time through NSURLSession, each written straight into its
+offset of a file truncated to its final size, one character of state per chunk so
+an interrupted download continues, and SHA-256 over the finished file before the
+directory is renamed from `data.part` to the `data` that `Paths::RootData()`
+looks for.
+
+It is 3.5 GB, not the 1.4 GB the upstream release weighs: that number is the
+tar.xz, and xz packs the game's zips by two and a half to one. Undoing that on
+the phone would need an xz decoder and a tar reader, so what travels is the zips
+themselves -- `public.zip`, `mod.zip` and the few kB of `config/`, republished as
+release assets by `tools/make-data-release.sh`. A release asset may not exceed
+2 GiB and `public.zip` is 3.5 GB, so it comes in parts of 1792 MiB, which is 224
+chunks: a part has to begin and end on a chunk boundary, or a chunk would have to
+be fetched from two parts at once.
+
+The download is the one thing here that cannot be tried on the platform it is
+for. It is tried at a different size instead: the simulator build also runs with
+no data in the bundle and a manifest that cuts the 89 MB base mod into twelve
+parts, which is the same arithmetic and the same return into `RunGameOrAtlas`.
+
+What a phone should do better than the simulator, for once: real GLES 3.x
+hardware instead of Apple's software renderer (patch 0024 does not even apply
+there), and a rotation that needs no explaining.
+
+And what pins it to **iOS 17.4**: `BrowserEngineCore` (patch 0021). SpiderMonkey's
+jit directory references Apple's W^X interface even when built `--disable-jit`,
+and that framework is not older than 17.4. Two stub symbols would lift it back
+to 13.0, since nothing ever calls them without a JIT.
+
 ## The dependencies, and the engine
 
 **`pyrogenesis` builds and links for the iOS Simulator**: 71 MB, arm64, stamped
@@ -216,10 +262,16 @@ missing `enet` in the lobby stub's library list.
 
 ## Next
 
-The `.app` bundle and `pyrogenesis -mod=mod` in the simulator - the mod
-selection screen needs a few MB instead of 3.5 GB, which makes it the right
-first thing to look at.
+An iPhone. Everything about the device build is checked statically -- that not
+one simulator slice is in the link, that the plist says iPhoneOS -- and nothing
+about it is checked by running it.
 
-Unanswered either way: multiplayer, whether anything is actually *audible*
-(a device opens, which is not the same as samples reaching it), and how a
-JIT-less SpiderMonkey holds up in a real match.
+Unanswered either way: multiplayer (no classic Bluetooth, and UDP broadcast
+discovery needs Apple's multicast entitlement), whether anything is actually
+*audible* (a device opens, which is not the same as samples reaching it), how a
+JIT-less SpiderMonkey holds up in a real match, and whether an interface designed
+for a mouse can be worked with fingers.
+
+Collada stays out (patch 0020): it is a second shared library loaded at runtime,
+which an `.ipa` cannot carry, and it only matters for loading *unbaked* meshes --
+the released data has none.
