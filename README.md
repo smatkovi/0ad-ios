@@ -419,6 +419,38 @@ seconds). And the arm deletes the other arms' simulator devices first: each hold
 a container with the 3.4 GB of game data, and this is where the runner's disk
 gets tight.
 
+**And they did.** First run, green:
+
+    Wirt  matchID 9CF793F5C9992D6F   hoechste Runde 1297
+    Gast  matchID 9CF793F5C9992D6F   hoechste Runde 1296
+    gemeinsame Runden 1296, davon ungleich 0
+    Net server: Received connection from 127.0.0.1:51642
+    CAuthenticateMessage { m_Name: Wirt, ... }
+
+The same 64 random bits in two files written by two processes in two containers;
+1296 turns hashed identically on both sides with not one mismatch; and a final
+distance of **one turn** between the two counters, taken with both processes
+frozen by the same signal (the bound is four).
+
+The numbers around it: **62 seconds** from the guest's launch until both sides
+were in a turn -- two random maps generated at once, in JavaScript, without a
+JIT. Then 1228 turns in the four minutes that followed, which is **five turns a
+second**, the ceiling a 200 ms turn length allows. A two-player match with no AI
+is cheaper than the single-player arm's two Petras, and this is what the port
+looks like when the renderer is not the thing in the way. Two processes, one core
+each at 100 %, 123 and 131 MB resident: two instances fit on a three-core runner
+with room to spare.
+
+Two of the arm's own checks were wrong, and only running it showed that:
+
+* `lsof | grep -q pyrogenesis` never matches. **lsof truncates COMMAND to nine
+  characters** and prints `pyrogenes`, so the wait loop sat out its full 420
+  seconds -- while the `lsof` immediately after it captured
+  `pyrogenes 3943 runner 11u IPv4 UDP *:20595` perfectly. It now asks whether
+  there is a data line at all.
+* And the gate on that measurement was `test -s`, which a file containing a bare
+  newline passes. It proved nothing, greenly. It now reads the content.
+
 ## What the missing JIT costs: 4.6x
 
 Measured rather than guessed, and on macOS, where the question can be asked at
@@ -474,8 +506,9 @@ one simulator slice is in the link, that the plist says iPhoneOS -- and nothing
 about it is checked by running it.
 
 Unanswered either way: whether a *speaker* moves, which is the one hop past the
-mix the wave writer proves; and whether an interface designed for a mouse can be
-worked with fingers -- the match above does not touch the touch patches, because
+mix the wave writer proves; whether multiplayer works between two *phones*, where
+the address is no longer loopback and the Local Network permission does apply;
+and whether an interface designed for a mouse can be worked with fingers -- the match above does not touch the touch patches, because
 nothing injects touches into a simulator.
 
 Collada stays out (patch 0020): it is a second shared library loaded at runtime,

@@ -599,10 +599,15 @@ jobs:
           # Horcht er? Das ist die eine Annahme, fuer die es keine Apple-Quelle
           # gibt -- eine App im Simulator ist ein Prozess des Wirtsrechners, also
           # fragt der Wirtsrechner.
+          # **Nicht nach "pyrogenesis" greifen**: lsof schneidet die Spalte
+          # COMMAND auf neun Zeichen ab und schreibt "pyrogenes". Der erste Lauf
+          # hat deshalb seine vollen 420 s abgewartet und nichts gefunden --
+          # waehrend das lsof danach den Prozess sauber auf UDP *:20595 zeigte.
+          # Also: gibt es ueberhaupt eine Datenzeile?
           HORCHT=""
           set +x
           while [ "$(date +%s)" -lt $((START + 420)) ]; do
-              if lsof -nP -iUDP:20595 2>/dev/null | grep -q pyrogenesis; then
+              if [ -n "$(lsof -nP -iUDP:20595 2>/dev/null | sed 1d)" ]; then
                   HORCHT=$(($(date +%s) - START))
                   break
               fi
@@ -733,7 +738,11 @@ jobs:
           test -f out-mp/gast/ios-frames.txt
           test -d out-mp/wirt/logs
           test -d out-mp/gast/logs
-          test -s out-mp/wirt-horcht.txt
+          # Nicht `test -s`: `echo ""` schreibt einen Zeilenumbruch, die Datei ist
+          # damit ein Byte gross und die Schranke waere immer gruen. Der erste
+          # Lauf ist genau so durchgegangen, ohne die Frage zu beantworten.
+          test -n "$(cat out-mp/wirt-horcht.txt)"
+          grep -q "UDP" out-mp/lsof-20595.txt
 
           python3 - <<'PY'
           import json, os, sys
