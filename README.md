@@ -147,6 +147,29 @@ settled from any source:
     Sound Card     : CoreAudio Default;
     Sound Drivers  : 1.1 ALSOFT 1.24.2
 
+**And there is something in it.** "A device opened" is not "samples reached it",
+and a simulator cannot be listened to -- `simctl io recordVideo` records no audio.
+So openal-soft is told to write its mix to a file instead of handing it to
+CoreAudio (`drivers = wave`, the config passed in through
+`SIMCTL_CHILD_ALSOFT_CONF`; an app in the simulator sees the host's own paths, so
+one absolute path serves both sides):
+
+    [ALSOFT] (II) Initialized backend "wave"
+    [ALSOFT] (II) Post-start: Stereo, Int16, 48000hz, 960 / 2880 buffer
+    Sound Card     : Wave File Writer;
+    34783300 Bytes
+    Spitze 5899 von 32767, 14434516 von 17391586 Abtastwerten ueber dem Rauschen
+
+33 MB of PCM: 181 seconds at 48 kHz stereo, which is exactly the three minutes the
+arm waits -- and **83 percent of the samples are above the noise floor**, peaking
+at -15 dBFS. That is the menu music playing continuously, not a click. Same
+engine calls, same decoders, same mixer; the one hop it does not prove is the
+speaker, and that needs a phone.
+
+The check reads the samples **raw, past every possible header**, and not with
+Python's `wave` module: the wave writer fills its RIFF lengths in when the device
+closes, this app is killed instead, and the module would believe the placeholder.
+
 It drew sideways in a corner at first, and the reason was not the one that
 looked obvious. The simulator *does* rotate the app to landscape -- it simply
 captures in the device's native portrait. What put the picture in the corner was
@@ -398,19 +421,11 @@ An iPhone. Everything about the device build is checked statically -- that not
 one simulator slice is in the link, that the plist says iPhoneOS -- and nothing
 about it is checked by running it.
 
-**Is it audible?** A device opens, which is not the same as samples reaching it,
-and a simulator cannot be listened to -- `simctl io recordVideo` records no audio.
-So a fourth arm asks openal-soft to write what it mixes into a file instead of
-handing it to CoreAudio (`drivers = wave`, the config handed over through
-`SIMCTL_CHILD_ALSOFT_CONF`). Same engine calls, same decoders, same mixer; only
-the last hop differs, and the RIFF header is never finalised because the app is
-killed, so the check reads the raw samples past every possible header rather than
-trusting a length field. What it cannot answer is whether a speaker moves.
-
 Unanswered either way: multiplayer (no classic Bluetooth, and UDP broadcast
-discovery needs Apple's multicast entitlement), and whether an interface designed
-for a mouse can be worked with fingers -- the match above does not touch the touch
-patches, because nothing injects touches into a simulator.
+discovery needs Apple's multicast entitlement); whether a *speaker* moves, which
+is the one hop past the mix the wave writer proves; and whether an interface
+designed for a mouse can be worked with fingers -- the match above does not touch
+the touch patches, because nothing injects touches into a simulator.
 
 Collada stays out (patch 0020): it is a second shared library loaded at runtime,
 which an `.ipa` cannot carry, and it only matters for loading *unbaked* meshes --
